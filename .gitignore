@@ -181,3 +181,7 @@ match_clips
 
 # Version file
 _version.py
+
+# Background removal experiment outputs
+experiments/background_removal/results/
+experiments/background_removal/data/

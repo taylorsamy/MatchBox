@@ -1,0 +1,4 @@
+# MatchBox's own requirements (Pillow, numpy, onnxruntime are what the ML methods need)
+-r ../../requirements.txt
+# Only for the GrabCut / backdrop-key methods and the synthetic scene generator
+opencv-python-headless>=4.8
