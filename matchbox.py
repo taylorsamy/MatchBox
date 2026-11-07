@@ -93,6 +93,7 @@ ADMIN_HASH = 'b2dccbe9889768f2f27b6715701a56a05cede5ca6a7d04494273a5a803d9bbcb'
 from local_video_processor import LocalVideoProcessor
 from companion import CompanionClient
 from robot_photos import RobotPhotoProcessor
+from team_list import TeamDirectory
 
 
 def get_rsync_path() -> str:
@@ -158,8 +159,9 @@ class MatchBoxConfig:
         self.robot_photos_enabled: bool = True
         self.robot_photo_width: int = 1200
         self.robot_photo_height: int = 900
-        self.robot_photo_model: str = 'u2net'  # 'u2net' (best) or 'u2netp' (smaller/faster, rougher edges)
+        self.robot_photo_model: str = 'birefnet-512'  # 'birefnet-512' (best, ~3.3 GB RAM) or 'u2net' (fast, low memory)
         self.robot_photo_pin: str = ''  # if set, uploads must supply this PIN
+        self.robot_photo_teams: str = ''  # optional "number name" per line; merged with the scoring system's list
 
 class MatchBoxCore:
     """Core MatchBox functionality combining OBS switching and video autosplitting"""
@@ -211,6 +213,9 @@ class MatchBoxCore:
 
         # Robot photos (stored under <clips_dir>/robot_photos, follows clips_dir if the event changes)
         self.robot_photos: RobotPhotoProcessor = RobotPhotoProcessor(lambda: self.clips_dir, self.config)
+
+        # Teams at the event, for the photo page's team picker (settings list + scoring system)
+        self.event_teams: TeamDirectory = TeamDirectory(self.config)
 
     def register_status_callback(self, callback: Callable[[dict[str, object]], None]) -> None:
         """Register a callback to be notified of status changes"""
@@ -1546,6 +1551,7 @@ class MatchBoxGUI:
         self.photo_height_var: tk.IntVar = tk.IntVar()
         self.photo_model_var: tk.StringVar = tk.StringVar()
         self.photo_pin_var: tk.StringVar = tk.StringVar()
+        self.photo_teams_text: tk.Text  # initialized in create_photos_tab
 
         # Tunnel UI elements (initialized in create_tunnel_settings_tab)
         self.start_tunnel_button: ttk.Button
@@ -1914,45 +1920,59 @@ class MatchBoxGUI:
         notebook.add(photos_frame, text="Photos")
 
         ttk.Label(photos_frame, text="Robot Photos", font=("", 12, "bold")).grid(
-            row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
 
         ttk.Checkbutton(photos_frame, text="Enable robot photo page",
                         variable=self.photos_enabled_var).grid(
-            row=1, column=0, columnspan=4, sticky=tk.W, pady=2)
+            row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
 
         capture_url = f"http://{self.config.mdns_name}:{self.config.web_port}/photos/"
         ttk.Label(photos_frame, text=f"Open on a phone or tablet: {capture_url}", foreground="gray").grid(
-            row=2, column=0, columnspan=4, sticky=tk.W, pady=2)
+            row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
 
-        ttk.Label(photos_frame, text="Photo size (pixels):").grid(row=3, column=0, sticky=tk.W, pady=2, padx=(0, 10))
-        size_frame = ttk.Frame(photos_frame, padding="0")
-        size_frame.grid(row=3, column=1, sticky=tk.W)
+        # Left: processing settings
+        settings = ttk.Frame(photos_frame, padding="0")
+        settings.grid(row=3, column=0, sticky=tk.NW, pady=(5, 0))
+
+        ttk.Label(settings, text="Photo size (pixels):").grid(row=0, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        size_frame = ttk.Frame(settings, padding="0")
+        size_frame.grid(row=0, column=1, sticky=tk.W)
         ttk.Entry(size_frame, textvariable=self.photo_width_var, width=6, validate="key", validatecommand=(self.vcmd, "%P")).pack(side=tk.LEFT)
         ttk.Label(size_frame, text=" x ").pack(side=tk.LEFT)
         ttk.Entry(size_frame, textvariable=self.photo_height_var, width=6, validate="key", validatecommand=(self.vcmd, "%P")).pack(side=tk.LEFT)
 
-        ttk.Label(photos_frame, text="Background removal:").grid(row=4, column=0, sticky=tk.W, pady=2, padx=(0, 10))
-        ttk.Combobox(photos_frame, textvariable=self.photo_model_var, values=["u2net", "u2netp"],
-                     state="readonly", width=10).grid(row=4, column=1, sticky=tk.W, pady=2)
-        ttk.Label(photos_frame, text="u2net: best quality (176 MB one-time download); u2netp: small and fast, rougher edges",
-                  foreground="gray").grid(row=5, column=1, columnspan=3, sticky=tk.W)
+        ttk.Label(settings, text="Background removal:").grid(row=1, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        ttk.Combobox(settings, textvariable=self.photo_model_var, values=["birefnet-512", "u2net"],
+                     state="readonly", width=14).grid(row=1, column=1, sticky=tk.W, pady=2)
+        ttk.Label(settings, text="\n".join([
+            "birefnet-512: best (941 MB download, ~3.3 GB RAM, ~7 s/photo)",
+            "u2net: fast and light, but fills in open robot frames",
+        ]), foreground="gray").grid(row=2, column=0, columnspan=2, sticky=tk.W)
 
-        ttk.Label(photos_frame, text="Upload PIN (optional):").grid(row=6, column=0, sticky=tk.W, pady=2, padx=(0, 10))
-        ttk.Entry(photos_frame, textvariable=self.photo_pin_var, width=30).grid(
-            row=6, column=1, sticky=tk.W, pady=2)
+        ttk.Label(settings, text="Upload PIN (optional):").grid(row=3, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        ttk.Entry(settings, textvariable=self.photo_pin_var, width=20).grid(row=3, column=1, sticky=tk.W, pady=2)
 
-        photo_button_frame = ttk.Frame(photos_frame)
-        photo_button_frame.grid(row=7, column=0, columnspan=4, sticky=tk.W, pady=(15, 5))
+        photo_button_frame = ttk.Frame(settings)
+        photo_button_frame.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
         ttk.Button(photo_button_frame, text="Download model now", command=self.download_photo_model).pack(side=tk.LEFT, padx=(0, 5))
         ttk.Button(photo_button_frame, text="Reprocess all photos", command=self.reprocess_photos).pack(side=tk.LEFT, padx=5)
 
+        # Right: the event's teams, so photographers can pick instead of typing
+        teams = ttk.Frame(photos_frame, padding="0")
+        teams.grid(row=3, column=1, sticky=tk.NW, padx=(25, 0), pady=(5, 0))
+        ttk.Label(teams, text="Event teams (optional):").grid(row=0, column=0, sticky=tk.W)
+        self.photo_teams_text = tk.Text(teams, height=7, width=34, wrap="none")
+        self.photo_teams_text.grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(teams, text="One per line: number name. Added to the\nscoring system's list when it is available.",
+                  foreground="gray").grid(row=2, column=0, sticky=tk.W)
+
         ttk.Label(photos_frame,
                   text="\n".join([
-                      "Without a PIN, anyone on the network can upload photos. Size/model changes apply to new",
-                      "photos; use Reprocess to apply them to existing ones. Photos are saved in the event's clips",
-                      "folder under robot_photos/ and are not uploaded by Sync.",
+                      "Photos are saved as robot_photos/processed/<team>.png in the event's clips folder (also served at",
+                      "/photos/img/processed/<team>.png for overlays) and are not uploaded by Sync. Without a PIN anyone on",
+                      "the network can upload. Use Reprocess to apply size/model changes to existing photos.",
                   ]),
-                  foreground="gray").grid(row=8, column=0, columnspan=4, sticky=tk.W, pady=5)
+                  foreground="gray").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
 
     def download_photo_model(self) -> None:
         """Download the background removal model in the background (progress is logged)"""
@@ -2075,8 +2095,9 @@ class MatchBoxGUI:
         self.config.robot_photos_enabled = self.photos_enabled_var.get()
         self.config.robot_photo_width = self._int_or(self.photo_width_var, 1200) or 1200
         self.config.robot_photo_height = self._int_or(self.photo_height_var, 900) or 900
-        self.config.robot_photo_model = self.photo_model_var.get() or 'u2net'
+        self.config.robot_photo_model = self.photo_model_var.get() or 'birefnet-512'
         self.config.robot_photo_pin = self.photo_pin_var.get().strip()
+        self.config.robot_photo_teams = self.photo_teams_text.get("1.0", "end-1c")
 
     def load_config_to_gui(self, config: MatchBoxConfig) -> None:
         """Load configuration into GUI"""
@@ -2124,6 +2145,8 @@ class MatchBoxGUI:
         self.photo_height_var.set(config.robot_photo_height)
         self.photo_model_var.set(config.robot_photo_model)
         self.photo_pin_var.set(config.robot_photo_pin)
+        self.photo_teams_text.delete("1.0", tk.END)
+        self.photo_teams_text.insert("1.0", config.robot_photo_teams)
 
     def save_config(self) -> None:
         """Save configuration to file"""

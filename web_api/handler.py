@@ -441,13 +441,21 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
         def _photos_payload(self) -> dict[str, object]:
             """Everything the capture page / admin tab needs: settings, capabilities and the photo list"""
             config = self._core.config
-            photos = self._core.robot_photos
+            teams = self._core.event_teams.get()
+            photos = self._core.robot_photos.list_photos()
+            for photo in photos:
+                team = str(photo['team'])
+                photo['name'] = teams.teams.get(team, '')
+                # Stable address of the finished photo (for overlays): /photos/img/processed/<team>.png
+                photo['url'] = f'/photos/img/processed/{team}.png' if photo.get('has_image') else None
             return {
                 'enabled': config.robot_photos_enabled,
                 'event_code': config.event_code,
                 'pin_required': bool(config.robot_photo_pin),
-                'capabilities': photos.capabilities(),
-                'photos': photos.list_photos(),
+                'capabilities': self._core.robot_photos.capabilities(),
+                'team_list': {'count': len(teams.teams), 'source': teams.source,
+                              'problem': teams.problem, 'loading': teams.loading},
+                'photos': photos,
             }
 
         def _handle_photos_get(self, path: str, query: dict[str, list[str]]) -> None:
@@ -462,6 +470,10 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
 
             if path == '/photos/api/photos':
                 self.send_json(self._photos_payload())
+                return
+
+            if path == '/photos/api/teams':
+                self.send_json(self._core.event_teams.get().to_dict())
                 return
 
             if path == '/photos/api/status':

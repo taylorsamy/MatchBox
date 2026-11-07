@@ -5,10 +5,14 @@ Photos are uploaded from a phone/tablet through the web server (see ``web_photos
 Each upload is stored untouched, then a background worker:
 
 1. fixes orientation (EXIF) and bounds the working size,
-2. removes the background with a U²-Net salient-object model run directly through
-   ``onnxruntime`` (no ``rembg`` dependency, so the standalone builds stay small),
-3. crops to the robot and fits it onto a fixed-size transparent canvas, so every
+2. removes the background with a segmentation model (BiRefNet by default, U²-Net as the
+   low-resource option) run directly through ``onnxruntime`` - no ``rembg`` dependency,
+   so the standalone builds stay small (see experiments/background_removal for the comparison),
+3. drops stray blobs that are separate from the robot (a loose ball on the floor),
+4. crops to the robot and fits it onto a fixed-size transparent canvas, so every
    processed photo has identical dimensions.
+
+Processed photos are named after the team number (``processed/<team>.png``), ready for overlays.
 
 Pillow, numpy and onnxruntime are imported lazily.  If they (or the model) are
 unavailable the photo is still resized onto the canvas, just without the cut-out,
@@ -47,39 +51,65 @@ WORK_MAX_EDGE = 3000  # longest edge of the working copy handed to the model
 CANVAS_MARGIN = 0.04  # fraction of the canvas left empty around the robot
 THUMB_WIDTH = 320
 MODEL_RETRY_SECONDS = 300.0  # don't hammer a failing download on every upload
+IDLE_UNLOAD_SECONDS = 600.0  # release the model's memory after this long without photos
 MIN_CANVAS = 200
 MAX_CANVAS = 4000
 
 PHOTO_DIRNAME = "robot_photos"
 
 
+IMAGENET_MEAN = (0.485, 0.456, 0.406)
+IMAGENET_STD = (0.229, 0.224, 0.225)
+
+
 @dataclass(frozen=True)
 class ModelSpec:
+    label: str
     filename: str
     url: str
     sha256: str
     size: int
+    input_size: int  # the ONNX exports have a fixed square input
+    sigmoid: bool = False  # BiRefNet outputs logits, U²-Net probabilities
+    mean: tuple[float, float, float] = IMAGENET_MEAN
+    std: tuple[float, float, float] = IMAGENET_STD
 
 
 _REMBG_RELEASE = "https://github.com/danielgatis/rembg/releases/download/v0.0.0/"
+_BIREFNET_RELEASE = "https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/"
 
-# Both models share the same 320x320 pre/post-processing.  Files use rembg's names so a
-# machine that already ran rembg reuses its ~/.u2net cache instead of downloading again.
+# Files keep their upstream names, so a machine that already ran rembg reuses its ~/.u2net cache.
 MODEL_SPECS: dict[str, ModelSpec] = {
+    # Best on real robot photos: open frames, crisp edges. ~3.3 GB RAM and ~7 s per photo on 2 threads.
+    "birefnet-512": ModelSpec(
+        label="BiRefNet 512 px (best quality, 941 MB download)",
+        filename="BiRefNet-general-resolution_512x512-fp16-epoch_216.onnx",
+        url=_BIREFNET_RELEASE + "BiRefNet-general-resolution_512x512-fp16-epoch_216.onnx",
+        sha256="18b64a270d3abe7d36e665500c3f24136bcaf7616771b4cb21c6e8c57fec7237",
+        size=940_526_436,
+        input_size=512,
+        sigmoid=True,
+    ),
+    # Low-resource option: ~1 GB RAM and under a second per photo, but fills in open robot frames.
     "u2net": ModelSpec(
+        label="U²-Net (fast, low memory, 176 MB download)",
         filename="u2net.onnx",
         url=_REMBG_RELEASE + "u2net.onnx",
         sha256="8d10d2f3bb75ae3b6d527c77944fc5e7dcd94b29809d47a739a7a728a912b491",
         size=175_997_641,
+        input_size=320,
     ),
+    # Kept so existing settings keep working; not offered in the UI (lowest quality).
     "u2netp": ModelSpec(
+        label="U²-Net-P (tiny, lowest quality)",
         filename="u2netp.onnx",
         url=_REMBG_RELEASE + "u2netp.onnx",
         sha256="309c8469258dda742793dce0ebea8e6dd393174f89934733ecc8b14c76f4ddd8",
         size=4_574_861,
+        input_size=320,
     ),
 }
-DEFAULT_MODEL = "u2net"
+DEFAULT_MODEL = "birefnet-512"
 
 
 class PhotoRejected(ValueError):
@@ -166,6 +196,97 @@ def fit_to_canvas(cutout: Image.Image, size: tuple[int, int]) -> Image.Image:
     return canvas
 
 
+def keep_main_subject(mask: Image.Image, min_share: float = 0.15) -> Image.Image:
+    """Drop blobs that are separate from, and much smaller than, the main subject.
+
+    Removes things like a loose ball on the floor next to the robot, which would otherwise
+    widen the crop and shrink the robot on the canvas.  A blob survives if it is the largest,
+    overlaps the largest blob's bounding box, or is at least ``min_share`` of its area, so
+    robot parts that came out disconnected are kept.  No OpenCV: connected components are
+    found from per-row runs of a downscaled copy of the mask.
+    """
+    import numpy as np
+    from PIL import Image, ImageFilter
+
+    small = mask.copy()
+    small.thumbnail((1024, 1024), Image.Resampling.BILINEAR)
+    w, h = small.size
+    solid = np.asarray(small, dtype=np.uint8) > 127
+
+    # 1. Runs of foreground pixels per row, as parallel lists: row, start, end (exclusive)
+    padded = np.zeros((h, w + 2), dtype=np.int8)
+    padded[:, 1:-1] = solid
+    edges = cast("npt.NDArray[np.int8]", np.diff(padded, axis=1))
+    rises, falls = np.nonzero(np.equal(edges, 1)), np.nonzero(np.equal(edges, -1))
+    run_row: list[int] = rises[0].tolist()
+    run_start: list[int] = rises[1].tolist()
+    run_end: list[int] = falls[1].tolist()
+    count = len(run_start)
+    if count == 0 or count > 200_000:  # nothing there, or pathological speckle not worth cleaning
+        return mask
+
+    first_in_row = [count] * (h + 1)  # index of each row's first run (runs are sorted by row)
+    for i in range(count - 1, -1, -1):
+        first_in_row[run_row[i]] = i
+    for r in range(h - 1, -1, -1):
+        first_in_row[r] = min(first_in_row[r], first_in_row[r + 1])
+
+    # 2. Union-find: runs in neighbouring rows that touch (diagonals included) are one blob
+    parent = list(range(count))
+
+    def find(i: int) -> int:
+        while parent[i] != i:
+            parent[i] = parent[parent[i]]
+            i = parent[i]
+        return i
+
+    for r in range(1, h):
+        i, a_end = first_in_row[r - 1], first_in_row[r]
+        j, b_end = first_in_row[r], first_in_row[r + 1]
+        while i < a_end and j < b_end:
+            if run_start[i] <= run_end[j] and run_start[j] <= run_end[i]:
+                ri, rj = find(i), find(j)
+                if ri != rj:
+                    parent[rj] = ri
+            if run_end[i] < run_end[j]:
+                i += 1
+            else:
+                j += 1
+
+    # 3. Area and bounding box per blob
+    area: dict[int, int] = {}
+    box: dict[int, list[int]] = {}  # x0, y0, x1, y1 (exclusive)
+    for i in range(count):
+        root = find(i)
+        area[root] = area.get(root, 0) + run_end[i] - run_start[i]
+        b = box.get(root)
+        if b is None:
+            box[root] = [run_start[i], run_row[i], run_end[i], run_row[i] + 1]
+        else:
+            b[0], b[1] = min(b[0], run_start[i]), min(b[1], run_row[i])
+            b[2], b[3] = max(b[2], run_end[i]), max(b[3], run_row[i] + 1)
+    if len(area) <= 1:
+        return mask
+    main = max(area, key=lambda k: area[k])
+    mx0, my0, mx1, my1 = box[main]
+    keep = {
+        root for root, (x0, y0, x1, y1) in box.items()
+        if root == main or (x0 < mx1 and mx0 < x1 and y0 < my1 and my0 < y1) or area[root] >= min_share * area[main]
+    }
+    if len(keep) == len(area):
+        return mask
+
+    # 4. Paint kept runs, grow slightly so each blob keeps its soft edge, then scale back up
+    kept = np.zeros((h, w), dtype=np.uint8)
+    for i in range(count):
+        if find(i) in keep:
+            kept[run_row[i], run_start[i]:run_end[i]] = 255
+    grow = max(3, round(min(h, w) * 0.01)) | 1
+    keep_img = Image.fromarray(kept).filter(ImageFilter.MaxFilter(grow)).resize(mask.size, Image.Resampling.NEAREST)
+    cleaned = np.minimum(np.asarray(mask, dtype=np.uint8), np.asarray(keep_img, dtype=np.uint8))
+    return Image.fromarray(cleaned)
+
+
 def _save_png_atomic(img: Image.Image, dest: Path) -> None:
     tmp = dest.with_name(dest.name + ".tmp")
     img.save(tmp, format="PNG")
@@ -176,11 +297,7 @@ def _save_png_atomic(img: Image.Image, dest: Path) -> None:
 
 
 class BackgroundRemover:
-    """U²-Net / U²-Net-P segmentation through onnxruntime, with lazy model download."""
-
-    _MEAN: tuple[float, float, float] = (0.485, 0.456, 0.406)
-    _STD: tuple[float, float, float] = (0.229, 0.224, 0.225)
-    _SIZE: int = 320
+    """Salient-object segmentation (BiRefNet / U²-Net) through onnxruntime, with lazy model download."""
 
     def __init__(self) -> None:
         self._lock: threading.Lock = threading.Lock()
@@ -204,6 +321,13 @@ class BackgroundRemover:
     @staticmethod
     def _spec(model: str) -> ModelSpec:
         return MODEL_SPECS.get(model) or MODEL_SPECS[DEFAULT_MODEL]
+
+    def unload(self) -> None:
+        """Release loaded models (they are reloaded on the next photo)."""
+        with self._lock:
+            if self._sessions:
+                self._sessions.clear()
+                logger.info("📷 Released the background removal model after a quiet period")
 
     def warm_up(self, model: str, allow_download: bool) -> None:
         """Load the model so the first photo isn't slow.  Never raises."""
@@ -249,8 +373,10 @@ class BackgroundRemover:
             self._download(spec, path)
 
         options = ort.SessionOptions()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
-        # OBS is usually encoding on this same machine: keep inference from taking every core.
+        # OBS is usually encoding on this same machine: keep inference from taking every core,
+        # and skip onnxruntime's memory arena (BiRefNet's peak RAM roughly halves: ~3.3 GB vs 4.5+ GB).
         options.intra_op_num_threads = 2
+        options.enable_cpu_mem_arena = False
         try:
             session = ort.InferenceSession(
                 str(path), sess_options=options, providers=["CPUExecutionProvider"]  # pyright: ignore[reportUnknownArgumentType]
@@ -311,16 +437,20 @@ class BackgroundRemover:
         import numpy as np
         from PIL import Image
 
-        small = img.convert("RGB").resize((self._SIZE, self._SIZE), Image.Resampling.LANCZOS)
+        spec = self._spec(model)
+        size = (spec.input_size, spec.input_size)
+        small = img.convert("RGB").resize(size, Image.Resampling.LANCZOS)
         arr = np.asarray(small, dtype=np.float32)
         arr = arr / max(float(arr.max()), 1e-6)
-        arr = (arr - np.array(self._MEAN, dtype=np.float32)) / np.array(self._STD, dtype=np.float32)
+        arr = (arr - np.array(spec.mean, dtype=np.float32)) / np.array(spec.std, dtype=np.float32)
         tensor = np.ascontiguousarray(arr.transpose(2, 0, 1)[None, ...], dtype=np.float32)
 
         run = cast("Callable[..., list[object]]", getattr(session, "run"))
         input_name = cast(str, getattr(getattr(session, "get_inputs")()[0], "name"))  # pyright: ignore[reportAny]
         outputs = run(None, {input_name: tensor})
         pred = cast("npt.NDArray[np.float32]", np.asarray(outputs[0], dtype=np.float32)[0, 0])
+        if spec.sigmoid:
+            pred = 1.0 / (1.0 + np.exp(-pred))
         low, high = float(pred.min()), float(pred.max())
         pred = (pred - low) / max(high - low, 1e-8)
         scaled = (pred * 255.0).astype(np.uint8)
@@ -406,6 +536,7 @@ class RobotPhotoProcessor:
             "width": width,
             "height": height,
             "model": model,
+            "model_label": MODEL_SPECS[model].label,
             "dependencies_ok": dependency_error is None,
             "model_ready": dependency_error is None and self._remover.model_ready(model),
             # Why cut-outs aren't happening (shown to photographers), if they aren't
@@ -536,7 +667,11 @@ class RobotPhotoProcessor:
 
     def _run(self) -> None:
         while True:
-            job = self._queue.get()
+            try:
+                job = self._queue.get(timeout=IDLE_UNLOAD_SECONDS)
+            except queue.Empty:
+                self._remover.unload()  # BiRefNet holds ~1 GB even when idle; give it back to OBS
+                continue
             if job is None:
                 return
             try:
@@ -591,5 +726,9 @@ class RobotPhotoProcessor:
         coverage = sum(histogram[128:]) / max(1, mask.width * mask.height)
         if coverage < 0.005:
             return rgba, False, "No robot detected in the photo"
+        try:
+            mask = keep_main_subject(mask)
+        except Exception as e:  # cleanup is a nicety: never lose the photo over it
+            logger.warning(f"📷 Skipped stray-blob cleanup: {e}")
         rgba.putalpha(mask)
         return rgba, True, ""

@@ -32,7 +32,7 @@ Note: There is no test suite.
 
 **Type checking:**
 ```bash
-basedpyright matchbox.py matchbox-cli.py matchbox-sync.py build.py web_api/ local_video_processor.py companion.py robot_photos.py
+basedpyright matchbox.py matchbox-cli.py matchbox-sync.py build.py web_api/ local_video_processor.py companion.py robot_photos.py team_list.py
 ```
 
 The project uses **basedpyright** in strict mode. When writing or modifying code:
@@ -59,7 +59,9 @@ The project uses **basedpyright** in strict mode. When writing or modifying code
 
 **companion.py** - Bitfocus Companion integration. `CompanionClient.handle_message()` is called for every scoring-system WebSocket message; it queues Companion HTTP API calls (button press by `page/row/column`, custom variables) on a background thread so Companion can never block the asyncio loop. Mappings are the text setting `companion_mappings` (`SIGNAL = page/row/column`)
 
-**robot_photos.py** - Robot photo pipeline. `RobotPhotoProcessor` stores uploads under `<clips_dir>/robot_photos/` (`originals/`, `processed/`, `thumbs/`) and processes them one at a time on a worker thread: EXIF rotate, U²-Net background removal through `onnxruntime` (`BackgroundRemover`, model downloaded lazily to `~/.u2net`), crop to subject, fit onto a fixed transparent canvas. Pillow/numpy/onnxruntime are imported lazily; without the model/onnxruntime photos are still resized and flagged `bg_removed: false`
+**robot_photos.py** - Robot photo pipeline. `RobotPhotoProcessor` stores uploads under `<clips_dir>/robot_photos/` (`originals/`, `processed/<team>.png`, `thumbs/`) and processes them one at a time on a worker thread: EXIF rotate, background removal through `onnxruntime` (`BackgroundRemover`; models in `MODEL_SPECS` with per-model input size/normalisation; default `birefnet-512`, low-resource `u2net`; downloaded lazily to `~/.u2net`, SHA-256 pinned; memory arena off; released after 10 idle minutes), `keep_main_subject()` stray-blob cleanup (pure numpy run-length connected components, no OpenCV), crop to subject, fit onto a fixed transparent canvas. Pillow/numpy/onnxruntime are imported lazily; without the model/onnxruntime photos are still resized and flagged `bg_removed: false`. Model choices are backed by `experiments/background_removal/` on the `experiment/background-removal` branch
+
+**team_list.py** - Event team list for the photo page's team picker. `TeamDirectory.get()` merges the `robot_photo_teams` setting (`number name` per line) with a best-effort, cached, background fetch of the scoring system's `/api/v1/events/<code>/teams/` (+ `/teams/<n>/` for names; several response shapes accepted, since that API is only documented in the scoring software's Swagger page). Never blocks on the network
 
 **web_api/** - Web server components:
 - `handler.py` - HTTP request handler with REST API routes, admin UI static file serving, and session-cookie authentication
@@ -96,6 +98,7 @@ FTC Scoring WebSocket → MatchBoxCore → OBS Scene Switch
 - WebSocket server: Separate daemon thread with its own asyncio event loop
 - Companion: one daemon worker thread draining a queue of HTTP requests
 - Robot photos: one daemon worker thread processing uploads sequentially (ONNX session limited to 2 threads so OBS isn't starved)
+- Team list: short-lived daemon thread refreshing the scoring system's team list (cached 5 min)
 - mDNS: Separate daemon thread for Zeroconf registration
 
 ### Web Admin & Remote Access
@@ -103,7 +106,7 @@ FTC Scoring WebSocket → MatchBoxCore → OBS Scene Switch
 - **Local access**: Admin UI served at `/admin/`, API at `/api/`, clip downloads at `/`
 - **Remote access**: WS tunnel client connects to relay server; relay proxies HTTP/WS requests back through the tunnel
 - **Authentication**: HMAC-signed session cookies (`mb_session`), 24h expiry. Two-tier: instance password (per-instance) and admin password (hardcoded hash via `ADMIN_SALT`/`ADMIN_HASH`). Localhost requests bypass auth (for tunnel-proxied requests).
-- **Robot photos**: `/photos/` (page), `/photos/api/photos|status|upload` and `/photos/img/<processed|thumbs>/<team>.png` are open to the local network like clip downloads (uploads take the raw image as the body, with an optional `X-Photo-Pin` header when `robot_photo_pin` is set). Originals are never served, and `/robot_photos/` is blocked from the clip file server. `/api/photos`, `/api/photos/reprocess` and `/api/photos/download-model` are authenticated admin routes. The rsync sync excludes `robot_photos/`
+- **Robot photos**: `/photos/` (page), `/photos/api/photos|status|teams|upload` and `/photos/img/<processed|thumbs>/<team>.png` are open to the local network like clip downloads (uploads take the raw image as the body, with an optional `X-Photo-Pin` header when `robot_photo_pin` is set). Originals are never served, and `/robot_photos/` is blocked from the clip file server. `/api/photos`, `/api/photos/reprocess` and `/api/photos/download-model` are authenticated admin routes. The rsync sync excludes `robot_photos/`
 - **WebSocket paths**: `/ws/logs` (log streaming), `/ws/status` (status updates), `/ws/obs` (OBS WebSocket proxy)
 
 ### Key Technical Details

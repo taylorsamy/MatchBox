@@ -284,15 +284,28 @@
         <div class="form-row">
             <label for="cfg-photo-model">Background removal model</label>
             <select id="cfg-photo-model">
-                <option value="u2net">U&sup2;-Net (best quality, 176 MB one-time download)</option>
-                <option value="u2netp">U&sup2;-Net-P (4.6 MB, faster, rougher edges)</option>
+                <option value="birefnet-512">BiRefNet 512 px (best; 941 MB download, ~3.3 GB RAM, ~7 s/photo)</option>
+                <option value="u2net">U&sup2;-Net (fast and light; fills in open robot frames)</option>
             </select>
         </div>
         <div class="form-row">
             <label for="cfg-photo-pin">Upload PIN (optional)</label>
             <input type="text" id="cfg-photo-pin" placeholder="Leave blank for no PIN" autocomplete="off">
         </div>
-        <p class="form-hint" style="margin-left:0;">Without a PIN, anyone on the network who opens the page can upload photos. Size and model changes apply to new photos; use &ldquo;Reprocess all photos&rdquo; to apply them to existing ones. Photos are stored in the event's clips folder under <code>robot_photos/</code> and are not uploaded by Sync.</p>
+        <p class="form-hint" style="margin-left:0;">Without a PIN, anyone on the network who opens the page can upload photos. Size and model changes apply to new photos; use &ldquo;Reprocess all photos&rdquo; to apply them to existing ones.</p>
+    </div>
+
+    <div class="form-section">
+        <h2>Event Teams</h2>
+        <p class="form-hint" style="margin-left:0; margin-bottom:8px;">Photographers pick the team from this list (or type the number). MatchBox also reads the team list from the scoring system when it can; teams listed here are added to it, and their names take priority.</p>
+        <textarea id="cfg-photo-teams" rows="6" spellcheck="false" placeholder="10298 Brainstormz&#10;26336 The Incredibots"></textarea>
+        <p class="form-hint" style="margin-left:0;">One team per line: <code>number name</code>. Tab- or comma-separated text pasted from a spreadsheet works too.</p>
+        <p id="photos-team-status" class="form-hint" style="margin-left:0; font-size:14px;">--</p>
+    </div>
+
+    <div class="form-section">
+        <h2>Using the Photos</h2>
+        <p class="form-hint" style="margin-left:0; font-size:13px;">Each processed photo is named after its team number: <code>robot_photos/processed/&lt;team&gt;.png</code> in the event's clips folder, also served at <span id="photos-overlay-url"><code>/photos/img/processed/&lt;team&gt;.png</code></span>. A JSON list of all photos (team, name, url) is at <code>/photos/api/photos</code>. Photos are not uploaded by Sync.</p>
     </div>
 
     <div class="form-section">

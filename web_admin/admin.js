@@ -274,8 +274,9 @@ function populateConfigForm(cfg) {
     setChecked('cfg-photos-enabled', cfg.robot_photos_enabled !== false);
     setVal('cfg-photo-width', cfg.robot_photo_width);
     setVal('cfg-photo-height', cfg.robot_photo_height);
-    setVal('cfg-photo-model', cfg.robot_photo_model || 'u2net');
+    setVal('cfg-photo-model', cfg.robot_photo_model === 'u2net' ? 'u2net' : 'birefnet-512');
     setVal('cfg-photo-pin', cfg.robot_photo_pin);
+    setVal('cfg-photo-teams', cfg.robot_photo_teams);
     updatePhotosUrl();
 }
 
@@ -314,8 +315,9 @@ function getConfigFromForm() {
         robot_photos_enabled: getChecked('cfg-photos-enabled', true),
         robot_photo_width: parseInt(getVal('cfg-photo-width')) || 1200,
         robot_photo_height: parseInt(getVal('cfg-photo-height')) || 900,
-        robot_photo_model: getVal('cfg-photo-model') || 'u2net',
+        robot_photo_model: getVal('cfg-photo-model') || 'birefnet-512',
         robot_photo_pin: getVal('cfg-photo-pin').trim(),
+        robot_photo_teams: getVal('cfg-photo-teams'),
     };
 }
 
@@ -455,11 +457,23 @@ function renderPhotos(data) {
     } else if (caps.problem) {
         status = 'Background removal problem: ' + caps.problem;
     } else if (caps.model_ready) {
-        status = `Ready: model ${caps.model}, photos are ${caps.width} \u00d7 ${caps.height} px.`;
+        status = `Ready: ${caps.model_label || caps.model}, photos are ${caps.width} \u00d7 ${caps.height} px.`;
     } else {
         status = 'Model not downloaded yet. It downloads automatically with the first photo (internet needed once), or use "Download model now".';
     }
     setText('photos-model-status', status);
+
+    const tl = data.team_list || {};
+    let teamStatus;
+    if (tl.count) {
+        teamStatus = `${tl.count} teams available to photographers (from ${tl.source}).`;
+        if (tl.source === 'settings' && tl.problem) teamStatus += ` Scoring system list not used: ${tl.problem}`;
+    } else if (tl.loading) {
+        teamStatus = 'Reading the team list from the scoring system...';
+    } else {
+        teamStatus = 'No team list: photographers type team numbers. ' + (tl.problem ? `(${tl.problem})` : '');
+    }
+    setText('photos-team-status', teamStatus);
 
     const photos = data.photos || [];
     const done = photos.filter(p => p.state === 'done').length;
@@ -501,7 +515,7 @@ function renderPhotos(data) {
 
         const name = document.createElement('div');
         name.className = 'name';
-        name.textContent = 'Team ' + photo.team;
+        name.textContent = 'Team ' + photo.team + (photo.name ? ' \u00b7 ' + photo.name : '');
         tile.appendChild(name);
 
         const badgeText = photo.state === 'error' ? 'failed'

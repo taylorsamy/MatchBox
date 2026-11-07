@@ -28,7 +28,7 @@ MatchBox is a standalone application that integrates with OBS and the *FIRST®* 
 - **Full remote administration**: Set an instance password, and you can have your team connect to MatchBox from anywhere, whether across the room or across the whole world, as long as you have an internet connection
   - Optionally, enable the option to let the MatchBox team connect to your instance.  Let the experts help keep your stream running smoothly, no matter where you are in the world
 - **Bitfocus Companion Integration**: Press Companion buttons and set Companion custom variables from the scoring system's match signals (preview, show match, match start, ...), so Stream Decks, tally lights, graphics, etc. can follow the match automatically
-- **Robot Photos**: A phone-friendly page on the local web server for photographing robots. Backgrounds are removed automatically and every photo is fitted onto the same size canvas, ready to use in overlays and galleries
+- **Robot Photos**: A phone-friendly page on the local web server for photographing robots. Photographers pick the team from the event's team list, backgrounds are removed automatically, and every photo is fitted onto the same size canvas and saved under its team number, ready to use in overlays and galleries
 - **Clipping continues even if the internet doesn't**: Internet at the event dropped out?  No worries!  MatchBox handles match clipping locally, and will upload the clips whenever internet returns.  No more loosing match footage forever because the internet dropped out for a time; MatchBox only needs the local connection to the scoring system to keep clipping away.
 
 <img width="941" height="997" alt="image" src="https://github.com/user-attachments/assets/4b4467ca-b73b-40d4-bd8b-269f168e7924" />
@@ -89,17 +89,34 @@ MatchBox can react to the scoring system's signals by pressing Companion buttons
 Companion calls never delay scene switching or clipping: if Companion is unreachable MatchBox just logs a warning (at most every 30 seconds) and carries on. If you run `matchbox-cli.py` on the same computer as Companion, change `--web-port` (the CLI also defaults to 8000).
 
 ### Robot Photos
-1. On a phone or tablet on the event network, open `http://ftcvideo.local/photos/` (or `http://[computer-ip]/photos/`).
-2. Enter the team number, tap **Take photo**, check the preview, and tap **Upload**.
-3. MatchBox saves the original, removes the background, and fits the robot onto a fixed-size transparent canvas (1200 × 900 by default; change it in the **Photos** tab). The result appears on the page a few seconds later. Tap a team in the list to retake its photo.
+1. Optionally list the event's teams in the **Photos** tab (one per line: `number name`; text pasted from a spreadsheet works). MatchBox also tries to read the team list from the scoring system, and merges the two.
+2. On a phone or tablet on the event network, open `http://ftcvideo.local/photos/` (or `http://[computer-ip]/photos/`).
+3. Pick the team: type the number (matching teams and their names are suggested), or tap it under **Still to photograph**. The page shows the team's name to confirm, and warns if the number isn't on the event's list.
+4. Tap **Take photo**, check the preview (it says which team it will be saved as), and tap **Upload**. You can photograph the next robot straight away: processing happens in the background, and the page tells you when each photo is ready.
+5. Tap a photo under **Photographed teams** to see it full size, or to retake it.
 
-Files are stored in `<output dir>/<event code>/robot_photos/`: `processed/<team>.png` (the finished photos), `thumbs/`, and `originals/` (every upload is kept). Processed photos are also available at `http://ftcvideo.local/photos/img/processed/<team>.png`, which works as an OBS Browser/Image source. They are not uploaded by Sync.
+MatchBox removes the background, drops stray objects that aren't part of the robot (like a loose ball on the floor), and fits the robot onto a fixed-size transparent canvas (1200 × 900 by default).
 
-- **First use needs internet once.** Background removal uses the U²-Net model (176 MB), which is downloaded the first time it is needed and stored in `~/.u2net` (set `U2NET_HOME` to change this). Use **Download model now** in the Photos tab before the event. Without the model (or without the `onnxruntime` package) photos are still saved and resized, just without the cut-out, and are marked "no cut-out" so you can **Reprocess all photos** later.
-- The `u2netp` model is a much smaller, faster alternative with rougher edges.
+**Using the photos (e.g. in an overlay):** every photo is named after its team number.
+
+- Files: `<output dir>/<event code>/robot_photos/processed/<team>.png`. Thumbnails are in `thumbs/`, and every original upload is kept in `originals/`.
+- URL: `http://ftcvideo.local/photos/img/processed/<team>.png`, usable as an OBS Browser or Image source.
+- List: `http://ftcvideo.local/photos/api/photos` is a JSON list of all photos, with team number, name and URL.
+- A retake replaces the team's file, so an overlay pointing at a team always shows the latest photo.
+- Photos are not uploaded by Sync.
+
+**Background removal models** (Photos tab), chosen by comparing methods on real event photos (see `experiments/background_removal/`):
+
+- **BiRefNet 512 px** (default): the best cut-outs, with clean open frames and solid robots. It is a 941 MB one-time download, uses about 3.3 GB of RAM while processing, and takes ~7 s per photo on 2 CPU threads. The model is released after 10 idle minutes.
+- **U²-Net**: a 176 MB download, about 1 GB of RAM, and under a second per photo, but it tends to fill in open robot frames with floor. Use it on low-memory computers.
+
+Notes:
+
+- **Download the model before the event.** It is downloaded the first time it's needed and stored in `~/.u2net` (set `U2NET_HOME` to change this). Use **Download model now** in the Photos tab while you have good internet. Without the model, or without the `onnxruntime` package, photos are still saved and resized, just without the cut-out. They're marked "no cut-out" so you can **Reprocess all photos** later.
 - Anyone on the network can open the page. Set an **Upload PIN** in the Photos tab to require one for uploads.
-- Processing uses at most two CPU threads and runs one photo at a time, so it won't starve OBS on the same computer.
+- Processing uses at most two CPU threads and handles one photo at a time, so it won't starve OBS on the same computer.
 - Photo capture is meant for the local network. Uploads can't go through the Remote Access relay, which limits request sizes to about 1 MB.
+- The scoring-system team list uses the scoring system's local API (`/api/v1/events/<code>/teams/`), which is only documented inside the scoring software. If it isn't available, the Photos tab says why, and the list from settings is used.
 
 ## Troubleshooting
 
@@ -128,6 +145,9 @@ Files are stored in `<output dir>/<event code>/robot_photos/`: `processed/<team>
 
 ### Robot Photos
 - No cut-out / "no cut-out" badge: see the Photos tab for why (usually the model has not been downloaded yet), then **Reprocess all photos**
+- No team list on the photo page: check the scoring system host and event code, or list the teams in the Photos tab. The tab shows where the list came from, or why the scoring system's list couldn't be read
+- Two robots in one photo: background removal keeps both. Retake with only the team's robot in frame
+- Processing is slow or the computer runs out of memory: switch the model to U²-Net in the Photos tab
 - Can't open the page from a phone: use the computer's IP address instead of `ftcvideo.local` (some phones don't resolve `.local` names)
 
 ### Scene Switching Not Working

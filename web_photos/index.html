@@ -25,7 +25,7 @@
         }
         header h1 { margin: 0; font-size: 20px; color: #fff; }
         header .event { color: var(--muted); font-size: 14px; }
-        main { max-width: 640px; margin: 0 auto; padding: 14px 16px 40px; }
+        main { max-width: 640px; margin: 0 auto; padding: 14px 16px 80px; }
         .card { background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 16px; }
         label.field { display: block; font-weight: 600; margin: 0 0 6px; }
         input[type=text], input[type=password] {
@@ -35,12 +35,21 @@
         input[type=text]:focus, input[type=password]:focus { outline: none; border-color: var(--accent); }
         input.invalid { border-color: var(--err); }
         .row { margin-bottom: 14px; }
+        .team-hint { min-height: 1.3em; margin: 6px 2px 0; font-size: 15px; }
+        .team-hint.ok { color: var(--ok); } .team-hint.warn { color: var(--warn); }
+        .suggest { display: flex; flex-direction: column; margin-top: 6px; border: 1px solid var(--border); border-radius: 8px; overflow: hidden; }
+        .suggest button {
+            text-align: left; padding: 11px 12px; font: inherit; font-size: 16px; color: var(--text);
+            background: var(--field); border: 0; border-top: 1px solid var(--border); cursor: pointer;
+        }
+        .suggest button:first-child { border-top: 0; }
+        .suggest button b { color: #fff; margin-right: 6px; }
         .buttons { display: flex; gap: 10px; flex-wrap: wrap; }
         .btn {
             flex: 1 1 140px; min-height: 52px; padding: 12px 16px; border: 1px solid var(--border);
             border-radius: 10px; background: var(--field); color: var(--text); font-size: 17px; font-weight: 600;
             text-align: center; cursor: pointer; display: flex; align-items: center; justify-content: center; gap: 8px;
-            user-select: none; -webkit-tap-highlight-color: transparent;
+            user-select: none; -webkit-tap-highlight-color: transparent; font-family: inherit;
         }
         .btn.primary { background: var(--accent); border-color: var(--accent); color: #fff; }
         .btn.primary:active, .btn.primary:hover { background: var(--accent-hover); }
@@ -56,20 +65,29 @@
             display: flex; align-items: center; justify-content: center; background: #111;
         }
         .preview img, .result img { max-width: 100%; max-height: 100%; display: block; }
-        .result.checker {
+        .checker {
             background-color: #cfcfcf;
             background-image: linear-gradient(45deg, #999 25%, transparent 25%, transparent 75%, #999 75%),
                               linear-gradient(45deg, #999 25%, transparent 25%, transparent 75%, #999 75%);
             background-size: 20px 20px; background-position: 0 0, 10px 10px;
         }
+        .confirm { margin: 0 0 12px; font-size: 16px; }
+        .confirm b { color: #fff; }
         .progress { height: 10px; background: var(--field); border-radius: 5px; overflow: hidden; margin: 0 0 10px; }
         .progress > div { height: 100%; width: 0; background: var(--accent); transition: width .15s; }
-        .progress.indeterminate > div { width: 35%; animation: slide 1.1s infinite ease-in-out; }
-        @keyframes slide { 0% { margin-left: -35%; } 100% { margin-left: 100%; } }
-        .status { min-height: 1.4em; margin: 0 0 12px; font-size: 15px; }
+        .status { min-height: 1.4em; margin: 0; font-size: 15px; }
+        .status:empty { display: none; }
+        #step-pick + .status, #step-preview + .status { margin-top: 12px; }
         .status.err { color: var(--err); } .status.ok { color: var(--ok); } .status.warn { color: var(--warn); }
-        h2 { font-size: 16px; margin: 0 0 12px; color: #fff; display: flex; justify-content: space-between; align-items: baseline; }
+        h2 { font-size: 16px; margin: 0 0 12px; color: #fff; display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
         h2 small { color: var(--muted); font-weight: 400; font-size: 13px; }
+        .chips { display: flex; flex-wrap: wrap; gap: 8px; }
+        .chip {
+            padding: 9px 12px; border-radius: 18px; border: 1px solid var(--border); background: var(--field);
+            color: var(--text); font: inherit; font-size: 15px; font-weight: 600; cursor: pointer; max-width: 100%;
+            overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+        }
+        .chip span { font-weight: 400; color: var(--muted); margin-left: 4px; }
         .grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(120px, 1fr)); gap: 10px; }
         .tile {
             position: relative; padding: 0; border: 1px solid var(--border); border-radius: 10px; background: var(--field);
@@ -84,10 +102,21 @@
         }
         .tile .thumb.empty { background: #111; }
         .tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
-        .tile .name { padding: 6px 4px; font-weight: 600; font-size: 14px; }
+        .tile .name { padding: 6px 6px 0; font-weight: 600; font-size: 14px; }
+        .tile .sub { padding: 0 6px 6px; font-size: 12px; color: var(--muted); white-space: nowrap; overflow: hidden; text-overflow: ellipsis; min-height: 1.6em; }
         .tile .badge { position: absolute; top: 4px; right: 4px; font-size: 11px; padding: 2px 6px; border-radius: 10px; color: #000; background: var(--warn); }
         .tile .badge.err { background: var(--err); color: #fff; }
         .empty-note { color: var(--muted); margin: 0; }
+        .viewer { position: fixed; inset: 0; background: rgba(0, 0, 0, .75); display: flex; align-items: center; justify-content: center; padding: 16px; z-index: 10; }
+        .viewer-card { width: 100%; max-width: 640px; max-height: 100%; overflow: auto; background: var(--card); border: 1px solid var(--border); border-radius: 12px; padding: 16px; }
+        .viewer .status { margin-bottom: 12px; }
+        .toast {
+            position: fixed; left: 50%; bottom: calc(16px + env(safe-area-inset-bottom)); transform: translateX(-50%);
+            width: calc(100% - 32px); max-width: 600px; padding: 12px 14px; border-radius: 10px; font-size: 15px;
+            background: #2e3b2f; border: 1px solid var(--ok); color: #d7f5d9; box-shadow: 0 6px 20px rgba(0, 0, 0, .4); z-index: 5;
+        }
+        .toast.warn { background: #3b2f1a; border-color: var(--warn); color: #ffe0b2; }
+        .toast.err { background: #3b1c1c; border-color: var(--err); color: #ffcdd2; }
         [hidden] { display: none !important; }
     </style>
 </head>
@@ -103,7 +132,10 @@
     <section class="card" id="capture-card">
         <div class="row">
             <label class="field" for="team">Team number</label>
-            <input id="team" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off" placeholder="e.g. 10298">
+            <input id="team" type="text" inputmode="numeric" pattern="[0-9]*" maxlength="6" autocomplete="off"
+                   placeholder="e.g. 10298" aria-describedby="team-hint">
+            <div id="suggest" class="suggest" hidden></div>
+            <p id="team-hint" class="team-hint" aria-live="polite"></p>
         </div>
         <div class="row" id="pin-row" hidden>
             <label class="field" for="pin">Upload PIN</label>
@@ -123,24 +155,22 @@
             <input id="file-library" class="sr-only" type="file" accept="image/*">
         </div>
 
-        <!-- Step 2: preview, then upload -->
+        <!-- Step 2: check the photo and the team, then upload -->
         <div id="step-preview" hidden>
             <div class="preview"><img id="preview-img" alt="Photo preview"></div>
+            <p class="confirm" id="confirm"></p>
+            <div id="step-progress" hidden><div class="progress" id="progress"><div></div></div></div>
             <div class="buttons">
                 <button class="btn primary" id="btn-upload" type="button">Upload</button>
                 <button class="btn" id="btn-cancel" type="button">Retake</button>
             </div>
         </div>
-
-        <!-- Step 3: uploading / processing / result -->
-        <div id="step-progress" hidden>
-            <div class="progress" id="progress"><div></div></div>
-        </div>
         <p class="status" id="status" role="status" aria-live="polite"></p>
-        <div id="step-result" hidden>
-            <div class="result checker"><img id="result-img" alt="Processed robot photo"></div>
-            <div class="buttons"><button class="btn primary" id="btn-next" type="button">Next robot</button></div>
-        </div>
+    </section>
+
+    <section class="card" id="todo-card" hidden>
+        <h2>Still to photograph <small id="todo-count"></small></h2>
+        <div class="chips" id="todo"></div>
     </section>
 
     <section class="card">
@@ -150,65 +180,157 @@
     </section>
 </main>
 
+<div class="viewer" id="viewer" hidden role="dialog" aria-modal="true" aria-labelledby="viewer-title">
+    <div class="viewer-card">
+        <h2 id="viewer-title"></h2>
+        <div class="result checker"><img id="viewer-img" alt=""></div>
+        <p class="status" id="viewer-status"></p>
+        <div class="buttons">
+            <button class="btn primary" id="viewer-retake" type="button">Retake this team</button>
+            <button class="btn" id="viewer-close" type="button">Close</button>
+        </div>
+    </div>
+</div>
+
+<div class="toast" id="toast" hidden role="status" aria-live="polite"></div>
+
 <script>
 (function () {
     'use strict';
     const $ = (id) => document.getElementById(id);
     const TEAM_RE = /^[0-9]{1,6}$/;
 
-    let file = null;          // the photo chosen but not yet uploaded
-    let previewUrl = null;    // object URL for the preview
-    let busy = false;         // uploading or processing
+    let file = null;            // the photo chosen but not yet uploaded
+    let previewUrl = null;
+    let uploading = false;
     let photoSettings = { enabled: true, pin_required: false, capabilities: {} };
+    let photos = [];            // latest list from the server
+    let teams = {};             // event team list: number -> name
+    let teamsKnown = false;     // is there an event team list at all?
+    let teamsLoading = false;   // the scoring system's list is still being fetched (list may be partial)
+    const myUploads = {};       // team -> true for uploads from this page that are still processing
+    let photoTimer = null;
+    let teamTimer = null;
+    let toastTimer = null;
+    let viewerTeam = null;
 
-    // ---- small helpers (storage can be unavailable in private browsing)
-    function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* ignore */ } }
+    function store(key, value) { try { localStorage.setItem(key, value); } catch (e) { /* private mode */ } }
     function recall(key) { try { return localStorage.getItem(key) || ''; } catch (e) { return ''; } }
 
     function setStatus(text, kind) {
-        const el = $('status');
-        el.textContent = text || '';
-        el.className = 'status' + (kind ? ' ' + kind : '');
+        $('status').textContent = text || '';
+        $('status').className = 'status' + (kind ? ' ' + kind : '');
+    }
+    function toast(text, kind) {
+        const el = $('toast');
+        el.textContent = text;
+        el.className = 'toast' + (kind ? ' ' + kind : '');
+        el.hidden = false;
+        clearTimeout(toastTimer);
+        toastTimer = setTimeout(() => { el.hidden = true; }, 6000);
     }
     function show(id, visible) { $(id).hidden = !visible; }
-    function setProgress(fraction) {
-        const bar = $('progress');
-        if (fraction == null) { bar.classList.add('indeterminate'); bar.firstElementChild.style.width = ''; }
-        else { bar.classList.remove('indeterminate'); bar.firstElementChild.style.width = Math.round(fraction * 100) + '%'; }
-    }
+    function setProgress(fraction) { $('progress').firstElementChild.style.width = Math.round(fraction * 100) + '%'; }
     function normalizedTeam() {
         const raw = $('team').value.trim();
         return TEAM_RE.test(raw) && parseInt(raw, 10) > 0 ? String(parseInt(raw, 10)) : null;
     }
+    function teamLabel(n) { return teams[n] ? n + ' · ' + teams[n] : 'Team ' + n; }
+    function photoFor(n) { return photos.find((p) => p.team === n); }
+
+    // ---- choosing the team
+    function chooseTeam(n) {
+        $('team').value = n;
+        $('team').classList.remove('invalid');
+        updateTeamUI();
+    }
+
+    function updateTeamUI() {
+        const n = normalizedTeam();
+        const hint = $('team-hint');
+        if (!n || !teamsKnown) {
+            hint.textContent = n && photoFor(n) && photoFor(n).has_image ? 'This team already has a photo; uploading replaces it.' : '';
+            hint.className = 'team-hint';
+        } else if (n in teams) {
+            const replacing = photoFor(n) && photoFor(n).has_image ? ' (already photographed; uploading replaces it)' : '';
+            hint.textContent = '✓ ' + (teams[n] || 'Registered at this event') + replacing;
+            hint.className = 'team-hint ok';
+        } else if (teamsLoading || Object.keys(teams).some((t) => t.startsWith(n))) {
+            hint.textContent = '';  // still typing: the suggestions below the field cover it
+            hint.className = 'team-hint';
+        } else {
+            hint.textContent = "Not on this event's team list. Check the number.";
+            hint.className = 'team-hint warn';
+        }
+        renderSuggestions();
+        if (file) renderConfirm();
+    }
+
+    function renderSuggestions() {
+        const box = $('suggest');
+        const typed = $('team').value.trim().replace(/^0+/, '');
+        box.textContent = '';
+        if (!teamsKnown || !typed || !/^[0-9]+$/.test(typed)) { box.hidden = true; return; }
+        const matches = Object.keys(teams).filter((n) => n.startsWith(typed) && n !== typed)
+            .sort((a, b) => a - b).slice(0, 6);
+        box.hidden = matches.length === 0;
+        matches.forEach((n) => {
+            const b = document.createElement('button');
+            b.type = 'button';
+            const num = document.createElement('b');
+            num.textContent = n;
+            b.appendChild(num);
+            b.appendChild(document.createTextNode(teams[n] || ''));
+            // pointerdown so the tap isn't lost to the input's blur / keyboard closing
+            b.addEventListener('pointerdown', (e) => { e.preventDefault(); chooseTeam(n); });
+            b.addEventListener('click', () => chooseTeam(n));
+            box.appendChild(b);
+        });
+    }
+
+    function renderConfirm() {
+        const n = normalizedTeam();
+        const el = $('confirm');
+        el.textContent = '';
+        if (!n) {
+            el.textContent = 'Enter the team number above, then tap Upload.';
+            el.className = 'confirm status warn';
+            return;
+        }
+        el.className = 'confirm';
+        el.appendChild(document.createTextNode('Uploading as '));
+        const b = document.createElement('b');
+        b.textContent = teamLabel(n);
+        el.appendChild(b);
+        if (teamsKnown && !teamsLoading && !(n in teams)) el.appendChild(document.createTextNode(" (not on this event's team list)"));
+    }
 
     // ---- screens
     function showPick() {
-        busy = false;
         if (previewUrl) { URL.revokeObjectURL(previewUrl); previewUrl = null; }
         file = null;
         $('file-camera').value = ''; $('file-library').value = '';
-        show('step-pick', true); show('step-preview', false); show('step-progress', false); show('step-result', false);
-        setStatus('');
+        show('step-pick', true); show('step-preview', false); show('step-progress', false);
     }
     function showPreview(f) {
         file = f;
         if (previewUrl) URL.revokeObjectURL(previewUrl);
         previewUrl = URL.createObjectURL(f);
         $('preview-img').src = previewUrl;
-        $('btn-upload').disabled = false; $('btn-cancel').disabled = false;  // were disabled by the previous upload
-        show('step-pick', false); show('step-preview', true); show('step-progress', false); show('step-result', false);
+        $('btn-upload').disabled = false; $('btn-cancel').disabled = false;
+        show('step-pick', false); show('step-preview', true); show('step-progress', false);
         setStatus('');
-        if (!normalizedTeam()) { $('team').classList.add('invalid'); setStatus('Enter the team number, then tap Upload.', 'warn'); }
+        renderConfirm();
+        if (!normalizedTeam()) $('team').classList.add('invalid');
     }
-
     function onFilePicked(event) {
         const f = event.target.files && event.target.files[0];
         if (f) showPreview(f);
     }
 
-    // ---- upload
+    // ---- upload (processing then continues on the server; the photographer can move on)
     function upload() {
-        if (busy || !file) return;
+        if (uploading || !file) return;
         const team = normalizedTeam();
         if (!team) {
             $('team').classList.add('invalid'); $('team').focus();
@@ -216,10 +338,10 @@
             return;
         }
         $('team').classList.remove('invalid');
-        busy = true;
+        uploading = true;
         $('btn-upload').disabled = true; $('btn-cancel').disabled = true;
         show('step-progress', true); setProgress(0);
-        setStatus('Uploading photo…');
+        setStatus('Uploading photo for ' + teamLabel(team) + '…');
 
         const xhr = new XMLHttpRequest();
         xhr.open('POST', 'api/upload?team=' + encodeURIComponent(team));
@@ -230,60 +352,46 @@
         }
         xhr.setRequestHeader('Content-Type', file.type || 'application/octet-stream');
         xhr.upload.onprogress = (e) => { if (e.lengthComputable) setProgress(e.loaded / e.total); };
-        xhr.upload.onload = () => { setProgress(null); setStatus('Removing background…'); };
         xhr.onerror = () => failUpload('Could not reach MatchBox. Check your Wi-Fi and try again.');
         xhr.ontimeout = xhr.onerror;
         xhr.onload = () => {
             let body = {};
             try { body = JSON.parse(xhr.responseText); } catch (e) { /* not JSON */ }
-            if (xhr.status === 202) { pollStatus(team, Date.now()); return; }
-            failUpload(body.error || ('Upload failed (HTTP ' + xhr.status + ')'));
+            if (xhr.status !== 202) { failUpload(body.error || ('Upload failed (HTTP ' + xhr.status + ')')); return; }
+            uploading = false;
+            myUploads[team] = true;
+            showPick();
+            $('team').value = '';
+            updateTeamUI();
+            setStatus(teamLabel(team) + ' uploaded and processing. Ready for the next robot.', 'ok');
+            loadPhotos();
         };
         xhr.send(file);
     }
-
     function failUpload(message) {
-        busy = false;
+        uploading = false;
         $('btn-upload').disabled = false; $('btn-cancel').disabled = false;
         show('step-progress', false);
         setStatus(message, 'err');
     }
 
-    async function pollStatus(team, startedAt) {
-        let status = null;
-        try {
-            const res = await fetch('api/status?team=' + encodeURIComponent(team), { cache: 'no-store' });
-            if (res.ok) status = await res.json();
-        } catch (e) { /* network blip: keep polling */ }
-
-        if (status && status.state === 'done') { return showResult(team, status); }
-        if (status && status.state === 'error') {
-            failUpload('Processing failed: ' + (status.message || 'unknown error') + '. The original photo was saved.');
-            return;
-        }
-        const seconds = (Date.now() - startedAt) / 1000;
-        if (seconds > 600) {
-            failUpload('This is taking too long. The photo was saved; check back in the list below.');
-            loadPhotos();
-            return;
-        }
-        if (seconds > 20) setStatus('Still working… the first photo can take a few minutes while MatchBox downloads the background-removal model.');
-        setTimeout(() => pollStatus(team, startedAt), 1000);
+    // ---- announce background results for this page's uploads
+    function announceFinished() {
+        Object.keys(myUploads).forEach((team) => {
+            const p = photoFor(team);
+            if (!p || p.state === 'queued' || p.state === 'processing') return;
+            delete myUploads[team];
+            if (p.state === 'error') {
+                toast(teamLabel(team) + ': processing failed (' + (p.message || 'unknown error') + '). The original was saved.', 'err');
+            } else if (p.bg_removed === false) {
+                toast(teamLabel(team) + ' saved, but the background was NOT removed' + (p.message ? ': ' + p.message : '') + '.', 'warn');
+            } else {
+                toast(teamLabel(team) + ' is ready. Tap it in the list to check it.');
+            }
+        });
     }
 
-    function showResult(team, status) {
-        busy = false;
-        show('step-pick', false); show('step-preview', false); show('step-progress', false); show('step-result', true);
-        $('result-img').src = 'img/processed/' + team + '.png?v=' + Math.round((status.updated || Date.now()) * 1000);
-        if (status.bg_removed === false) {
-            setStatus('Saved, but the background was NOT removed' + (status.message ? ': ' + status.message : '') + '.', 'warn');
-        } else {
-            setStatus('Team ' + team + ' saved. Not right? Choose the team in the list below and retake it.', 'ok');
-        }
-        loadPhotos();
-    }
-
-    // ---- photo list + settings
+    // ---- settings banner
     function renderBanner() {
         const el = $('banner');
         const caps = photoSettings.capabilities || {};
@@ -306,22 +414,57 @@
         show('pin-row', !!photoSettings.pin_required);
     }
 
-    function renderGallery(photos) {
+    // ---- lists
+    function renderTodo() {
+        const card = $('todo-card');
+        if (!teamsKnown) { card.hidden = true; return; }
+        const done = new Set(photos.filter((p) => p.has_image).map((p) => p.team));
+        const missing = Object.keys(teams).filter((n) => !done.has(n)).sort((a, b) => a - b);
+        const total = Object.keys(teams).length;
+        card.hidden = false;
+        $('todo-count').textContent = (total - missing.length) + ' of ' + total + ' done';
+        const box = $('todo');
+        box.textContent = '';
+        if (missing.length === 0) {
+            const p = document.createElement('p');
+            p.className = 'empty-note'; p.textContent = 'Every team has a photo.';
+            box.appendChild(p);
+            return;
+        }
+        missing.forEach((n) => {
+            const chip = document.createElement('button');
+            chip.type = 'button'; chip.className = 'chip';
+            chip.textContent = n;
+            if (teams[n]) {
+                const s = document.createElement('span');
+                s.textContent = teams[n];
+                chip.appendChild(s);
+            }
+            chip.addEventListener('click', () => {
+                chooseTeam(n);
+                if (!file) showPick();
+                window.scrollTo({ top: 0, behavior: 'smooth' });
+            });
+            box.appendChild(chip);
+        });
+    }
+
+    function renderGallery() {
         const grid = $('gallery');
         grid.textContent = '';
         $('gallery-empty').hidden = photos.length > 0;
-        const done = photos.filter((p) => p.state === 'done').length;
+        const done = photos.filter((p) => p.has_image).length;
         $('count').textContent = photos.length ? done + ' team' + (done === 1 ? '' : 's') : '';
         photos.forEach((p) => {
             const tile = document.createElement('button');
             tile.type = 'button'; tile.className = 'tile';
-            tile.title = 'Retake team ' + p.team;
+            tile.setAttribute('aria-label', 'View ' + teamLabel(p.team));
 
             const thumb = document.createElement('div');
             thumb.className = 'thumb';
             if (p.has_image) {  // an earlier photo stays visible while a retake is processed
                 const img = document.createElement('img');
-                img.loading = 'lazy'; img.alt = 'Team ' + p.team;
+                img.loading = 'lazy'; img.alt = '';
                 img.src = 'img/thumbs/' + p.team + '.png?v=' + Math.round((p.updated || 0) * 1000);
                 thumb.appendChild(img);
             } else {
@@ -333,22 +476,51 @@
             const name = document.createElement('div');
             name.className = 'name'; name.textContent = p.team;
             tile.appendChild(name);
+            const sub = document.createElement('div');
+            sub.className = 'sub'; sub.textContent = teams[p.team] || p.name || '';
+            tile.appendChild(sub);
 
-            if (p.state === 'error') {
-                const b = document.createElement('span'); b.className = 'badge err'; b.textContent = 'failed'; tile.appendChild(b);
-            } else if (p.state === 'queued' || p.state === 'processing') {
-                const b = document.createElement('span'); b.className = 'badge'; b.textContent = 'updating'; tile.appendChild(b);
-            } else if (p.state === 'done' && p.bg_removed === false) {
-                const b = document.createElement('span'); b.className = 'badge'; b.textContent = 'no cut-out'; tile.appendChild(b);
+            let badge = '';
+            if (p.state === 'error') badge = 'failed';
+            else if (p.state === 'queued' || p.state === 'processing') badge = 'processing';
+            else if (p.bg_removed === false) badge = 'no cut-out';
+            if (badge) {
+                const b = document.createElement('span');
+                b.className = 'badge' + (p.state === 'error' ? ' err' : '');
+                b.textContent = badge;
+                tile.appendChild(b);
             }
-            tile.addEventListener('click', () => {
-                if (busy) return;
-                $('team').value = p.team; $('team').classList.remove('invalid');
-                showPick();
-                window.scrollTo({ top: 0, behavior: 'smooth' });
-            });
+            tile.addEventListener('click', () => openViewer(p.team));
             grid.appendChild(tile);
         });
+    }
+
+    // ---- full-size viewer
+    function openViewer(team) {
+        const p = photoFor(team);
+        if (!p) return;
+        viewerTeam = team;
+        $('viewer-title').textContent = teamLabel(team);
+        const img = $('viewer-img');
+        img.hidden = !p.has_image;
+        if (p.has_image) img.src = 'img/processed/' + team + '.png?v=' + Math.round((p.updated || 0) * 1000);
+        img.alt = 'Processed photo of ' + teamLabel(team);
+        let text = '', kind = '';
+        if (p.state === 'queued' || p.state === 'processing') { text = 'A new photo is still processing…'; }
+        else if (p.state === 'error') { text = 'Processing failed: ' + (p.message || 'unknown error'); kind = 'err'; }
+        else if (p.bg_removed === false) { text = 'Background not removed' + (p.message ? ': ' + p.message : '') + '.'; kind = 'warn'; }
+        $('viewer-status').textContent = text;
+        $('viewer-status').className = 'status' + (kind ? ' ' + kind : '');
+        $('viewer').hidden = false;
+        $('viewer-close').focus();
+    }
+    function closeViewer() { $('viewer').hidden = true; viewerTeam = null; }
+
+    // ---- data loading
+    function schedulePhotos() {
+        clearTimeout(photoTimer);
+        const busy = photos.some((p) => p.state === 'queued' || p.state === 'processing');
+        photoTimer = setTimeout(loadPhotos, busy ? 2000 : 30000);
     }
 
     async function loadPhotos() {
@@ -356,36 +528,71 @@
             const res = await fetch('api/photos', { cache: 'no-store' });
             if (res.status === 503) {
                 photoSettings = { enabled: false, pin_required: false, capabilities: {} };
-                renderBanner(); renderGallery([]);
+                photos = [];
+                renderBanner(); renderGallery(); renderTodo();
                 return;
             }
             if (!res.ok) throw new Error('HTTP ' + res.status);
             photoSettings = await res.json();
+            photos = photoSettings.photos || [];
             $('event').textContent = photoSettings.event_code || '';
-            renderBanner();
-            renderGallery(photoSettings.photos || []);
+            renderBanner(); renderGallery(); renderTodo(); updateTeamUI();
+            announceFinished();
+            if (viewerTeam && photoFor(viewerTeam)) openViewer(viewerTeam);
         } catch (e) {
             const el = $('banner');
             el.hidden = false; el.className = 'banner err';
             el.textContent = 'Can’t reach MatchBox. Check your Wi-Fi connection.';
+        } finally {
+            schedulePhotos();
         }
+    }
+
+    async function loadTeams() {
+        let loading = false;
+        try {
+            const res = await fetch('api/teams', { cache: 'no-store' });
+            if (res.ok) {
+                const data = await res.json();
+                teams = {};
+                (data.teams || []).forEach((t) => { teams[t.number] = t.name || ''; });
+                teamsKnown = Object.keys(teams).length > 0;
+                loading = !!data.loading;
+                teamsLoading = loading;
+                renderTodo(); renderGallery(); updateTeamUI();
+            }
+        } catch (e) { /* keep the previous list */ }
+        clearTimeout(teamTimer);
+        teamTimer = setTimeout(loadTeams, loading ? 4000 : 60000);
     }
 
     // ---- wiring
     $('file-camera').addEventListener('change', onFilePicked);
     $('file-library').addEventListener('change', onFilePicked);
     $('btn-upload').addEventListener('click', upload);
-    $('btn-cancel').addEventListener('click', showPick);
-    $('btn-next').addEventListener('click', () => { $('team').value = ''; showPick(); $('team').focus(); });
+    $('btn-cancel').addEventListener('click', () => { showPick(); setStatus(''); });
     $('team').addEventListener('input', () => {
         const el = $('team');
         el.value = el.value.replace(/[^0-9]/g, '');
         el.classList.remove('invalid');
+        updateTeamUI();
     });
+    $('viewer-close').addEventListener('click', closeViewer);
+    $('viewer').addEventListener('click', (e) => { if (e.target === $('viewer')) closeViewer(); });
+    $('viewer-retake').addEventListener('click', () => {
+        const team = viewerTeam;
+        closeViewer();
+        if (team) chooseTeam(team);
+        showPick();
+        setStatus('Retaking ' + teamLabel(team) + ': take the new photo.', '');
+        window.scrollTo({ top: 0, behavior: 'smooth' });
+    });
+    document.addEventListener('keydown', (e) => { if (e.key === 'Escape' && !$('viewer').hidden) closeViewer(); });
     $('pin').value = recall('mb_photo_pin');
-    document.addEventListener('visibilitychange', () => { if (!document.hidden && !busy) loadPhotos(); });
+    document.addEventListener('visibilitychange', () => { if (!document.hidden) { loadPhotos(); loadTeams(); } });
 
     showPick();
+    loadTeams();
     loadPhotos();
 })();
 </script>
