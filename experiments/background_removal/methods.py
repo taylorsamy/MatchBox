@@ -29,6 +29,8 @@ IMAGENET_STD = (0.229, 0.224, 0.225)
 
 # onnxruntime threads per model; MatchBox uses 2 so OBS keeps the rest of the CPU
 THREADS = 2
+# onnxruntime's CPU memory arena: faster, but holds on to (much) more memory. Off = --no-arena
+ARENA = True
 
 FloatArray = npt.NDArray[np.float32]
 
@@ -38,7 +40,7 @@ def model_dir() -> Path:
     return Path(override) if override else Path.home() / ".u2net"
 
 
-def fetch_model(filename: str, sha256: str, size: int) -> Path:
+def fetch_model(filename: str, sha256: str, size: int, host: str = MODEL_HOST) -> Path:
     """Return the cached model path, downloading (and verifying) it first if needed."""
     path = model_dir() / filename
     if path.is_file() and path.stat().st_size == size:
@@ -47,7 +49,7 @@ def fetch_model(filename: str, sha256: str, size: int) -> Path:
     tmp = path.with_name(path.name + ".partial")
     digest = hashlib.sha256()
     print(f"  downloading {filename} ({size / 1e6:.0f} MB)...", flush=True)
-    request = urllib.request.Request(MODEL_HOST + filename, headers={"User-Agent": "MatchBox-benchmark"})
+    request = urllib.request.Request(host + filename, headers={"User-Agent": "MatchBox-benchmark"})
     with urllib.request.urlopen(request, timeout=60) as response, open(tmp, "wb") as out:  # pyright: ignore[reportAny]
         while chunk := cast(bytes, response.read(1 << 20)):  # pyright: ignore[reportAny]
             _ = out.write(chunk)
@@ -89,7 +91,7 @@ class OnnxSalient(Method):
     def __init__(
         self, *, name: str, description: str, license: str, filename: str, sha256: str, download_bytes: int,
         input_size: int, mean: tuple[float, float, float] = IMAGENET_MEAN,
-        std: tuple[float, float, float] = IMAGENET_STD, sigmoid: bool = False,
+        std: tuple[float, float, float] = IMAGENET_STD, sigmoid: bool = False, host: str = MODEL_HOST,
     ) -> None:
         self.name = name
         self.description = description
@@ -101,14 +103,16 @@ class OnnxSalient(Method):
         self.mean: tuple[float, float, float] = mean
         self.std: tuple[float, float, float] = std
         self.sigmoid: bool = sigmoid  # BiRefNet outputs logits
+        self.host: str = host
         self._session: object | None = None
 
     def load(self) -> None:
         import onnxruntime as ort  # pyright: ignore[reportMissingTypeStubs]
 
-        path = fetch_model(self.filename, self.sha256, self.download_bytes)
+        path = fetch_model(self.filename, self.sha256, self.download_bytes, self.host)
         options = ort.SessionOptions()  # pyright: ignore[reportUnknownMemberType, reportUnknownVariableType]
         options.intra_op_num_threads = THREADS
+        options.enable_cpu_mem_arena = ARENA
         self._session = ort.InferenceSession(  # pyright: ignore[reportUnknownMemberType]
             str(path), sess_options=options, providers=["CPUExecutionProvider"]  # pyright: ignore[reportUnknownArgumentType]
         )
@@ -262,6 +266,37 @@ class BackdropKey(Method):
         return mask.resize(img.size, Image.Resampling.BILINEAR)
 
 
+# --------------------------------------------------------------------------- post-processing
+
+
+def keep_main_subject(mask: Image.Image, min_share: float = 0.15) -> Image.Image:
+    """Drop blobs that are separate from, and much smaller than, the main subject (e.g. a loose ball on the floor).
+
+    A blob is kept if it is the largest, overlaps the largest blob's bounding box, or is at least
+    ``min_share`` of its area - so parts of the robot that came out disconnected survive.
+    """
+    import cv2
+
+    alpha = np.asarray(mask, dtype=np.uint8)
+    count, labels_mat, stats_mat, _ = cv2.connectedComponentsWithStats((alpha > 127).astype(np.uint8), connectivity=8)
+    if count <= 2:
+        return mask
+    labels = np.asarray(labels_mat, dtype=np.intp)
+    stats = np.asarray(stats_mat, dtype=np.int64)
+    areas = stats[1:, cv2.CC_STAT_AREA]
+    main = 1 + int(np.argmax(areas))
+    mx, my, mw, mh = (int(v) for v in stats[main, :4])
+    keep = np.zeros(count, np.bool_)
+    for i in range(1, count):
+        x, y, w, h, area = (int(v) for v in stats[i])
+        overlaps = x < mx + mw and mx < x + w and y < my + mh and my < y + h
+        keep[i] = i == main or overlaps or area >= min_share * float(areas.max())
+    # The soft edge around a kept blob belongs to it: grow the kept area slightly before masking
+    k = max(3, round(min(alpha.shape) * 0.01)) | 1
+    kept = cv2.dilate(keep[labels].astype(np.uint8), np.ones((k, k), np.uint8)) > 0
+    return Image.fromarray(np.where(kept, alpha, 0).astype(np.uint8))
+
+
 # --------------------------------------------------------------------------- registry
 
 
@@ -300,6 +335,13 @@ def build_methods() -> dict[str, Method]:
             filename="BiRefNet-general-epoch_244.onnx", download_bytes=972_666_916, input_size=1024,
             sigmoid=True, sha256="58f621f00f5d756097615970a88a791584600dcf7c45b18a0a6267535a1ebd3c",
         ),
+        OnnxSalient(
+            name="birefnet-512", description="BiRefNet general, Swin-L backbone, 512 px export (from the BiRefNet authors)",
+            license="MIT", filename="BiRefNet-general-resolution_512x512-fp16-epoch_216.onnx",
+            download_bytes=940_526_436, input_size=512, sigmoid=True,
+            sha256="18b64a270d3abe7d36e665500c3f24136bcaf7616771b4cb21c6e8c57fec7237",
+            host="https://github.com/ZhengPeng7/BiRefNet/releases/download/v1/",
+        ),
         GrabCut(),
         BackdropKey(),
         GrabCutRefine(u2net),
@@ -310,6 +352,6 @@ def build_methods() -> dict[str, Method]:
 
 # Everything except the ~1 GB BiRefNet, which needed ~14 GB of RAM on CPU (opt in with --methods all or by name)
 DEFAULT_METHODS = [
-    "u2net", "u2netp", "silueta", "isnet", "birefnet-lite",
+    "u2net", "u2netp", "silueta", "isnet", "birefnet-lite", "birefnet-512",
     "grabcut", "backdrop-key", "u2net+grabcut", "isnet+grabcut",
 ]

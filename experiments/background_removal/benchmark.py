@@ -42,7 +42,7 @@ HERE = Path(__file__).resolve().parent
 sys.path.insert(0, str(HERE.parents[1]))  # repo root, for robot_photos
 
 import methods as methods_mod  # noqa: E402  # pyright: ignore[reportImplicitRelativeImport]  (run as a script)
-from methods import DEFAULT_METHODS, Method, build_methods  # noqa: E402  # pyright: ignore[reportImplicitRelativeImport]
+from methods import DEFAULT_METHODS, Method, build_methods, keep_main_subject  # noqa: E402  # pyright: ignore[reportImplicitRelativeImport]
 from robot_photos import load_working_image  # noqa: E402
 
 IMAGE_EXTS = {".jpg", ".jpeg", ".png", ".webp"}
@@ -55,6 +55,25 @@ STRETCH_LUT = [min(255, max(0, round((v - 24) * 255 / (255 - 48)))) for v in ran
 
 Bool = npt.NDArray[np.bool_]
 Float = npt.NDArray[np.float32]
+
+
+def reset_peak_memory() -> None:
+    """Linux: reset this process's peak-RSS counter, so each method's peak can be read separately."""
+    try:
+        _ = Path("/proc/self/clear_refs").write_text("5")
+    except OSError:
+        pass
+
+
+def peak_memory_mb() -> float | None:
+    """Peak resident memory of this process since the last reset (Linux only), in MB."""
+    try:
+        for line in Path("/proc/self/status").read_text().splitlines():
+            if line.startswith("VmHWM:"):
+                return int(line.split()[1]) / 1024
+    except (OSError, ValueError):
+        pass
+    return None
 
 
 def find_photos(paths: list[Path]) -> list[Path]:
@@ -156,11 +175,14 @@ def write_report(out: Path, runs: list[dict[str, object]], photos: list[dict[str
         secs = cast("float | None", run.get("mean_seconds"))
         t_cls = ' class="best"' if secs is not None and fastest is not None and abs(secs - fastest) < 1e-9 else ""
         error = f'<div class="err">{html.escape(cast(str, run["error"]))}</div>' if run.get("error") else ""
+        peak = cast("float | None", run.get("peak_mb"))
+        peak_txt = "–" if peak is None else f"{peak / 1024:.1f} GB"
         summary_rows.append(
             f"<tr><th>{html.escape(name)}<div class=\"desc\">{html.escape(cast(str, run['description']))}</div>{error}</th>"
             f"<td>{html.escape(cast(str, run['family']))}</td>"
             f"<td>{cast(int, run['download_bytes']) / 1e6:.0f} MB</td>"
             f"<td>{cast(float, run['load_seconds']):.1f} s</td>"
+            f"<td>{peak_txt}</td>"
             f"<td{t_cls}>{'–' if secs is None else f'{secs:.2f} s'}</td>"
             + "".join(cells)
             + f"<td>{html.escape(cast(str, run['license']))}</td></tr>"
@@ -227,11 +249,11 @@ body.bg-green .cut .frame {{ background:#18c040; }} body.bg-magenta .cut .frame 
 </style></head>
 <body>
 <h1>Background removal comparison</h1>
-<p class="env">{html.escape(str(env["photos"]))} photos · {html.escape(str(env["cpu"]))} · onnxruntime {html.escape(str(env["threads"]))} threads · {html.escape(str(env["date"]))}</p>
+<p class="env">{html.escape(str(env["photos"]))} photos · {html.escape(str(env["cpu"]))} · onnxruntime {html.escape(str(env["threads"]))} threads, memory arena {"on" if env.get("arena") else "off"} · {html.escape(str(env["date"]))}</p>
 <div class="tablewrap"><table>
-<thead><tr><th style="text-align:left">Method</th><th>Type</th><th>Download</th><th>Load</th><th>Per photo</th>{metric_heads}<th>License</th></tr></thead>
+<thead><tr><th style="text-align:left">Method</th><th>Type</th><th>Download</th><th>Load</th><th>Peak RAM</th><th>Per photo</th>{metric_heads}<th>License</th></tr></thead>
 <tbody>{"".join(summary_rows)}</tbody></table></div>
-<p class="note">Scores are averages over the photos that have ground truth (synthetic scenes). "Holes kept" is how opaque the background seen through the robot came out, "Shadow kept" how much of the floor shadow survived: lower is better for both. Per-photo time is after a warm-up run. Best value per column in green.</p>
+<p class="note">Scores are averages over the photos that have ground truth (synthetic scenes). "Holes kept" is how opaque the background seen through the robot came out, "Shadow kept" how much of the floor shadow survived: lower is better for both. Per-photo time is after a warm-up run. Peak RAM is the whole benchmark process (it includes the loaded photos) while that method ran. Best value per column in green.</p>
 <h2>Cut-outs</h2>
 <div class="controls">Background:
 <button data-bg="checker" class="on">Checker</button><button data-bg="white">White</button><button data-bg="black">Black</button><button data-bg="green">Green</button><button data-bg="magenta">Magenta</button>
@@ -264,6 +286,8 @@ def main() -> int:
     _ = parser.add_argument("--out", type=Path, default=HERE / "results")
     _ = parser.add_argument("--threads", type=int, default=methods_mod.THREADS)
     _ = parser.add_argument("--no-stretch", action="store_true", help="skip MatchBox's mask post-processing")
+    _ = parser.add_argument("--no-arena", action="store_true", help="disable onnxruntime's memory arena (less RAM, a bit slower)")
+    _ = parser.add_argument("--keep-main", action="store_true", help="drop small blobs separate from the main subject (e.g. loose balls)")
     args = parser.parse_args()
 
     available = build_methods()
@@ -273,6 +297,7 @@ def main() -> int:
         print(f"Unknown methods: {', '.join(unknown)}. Available: {', '.join(available)}")
         return 2
     methods_mod.THREADS = int(args.threads)
+    methods_mod.ARENA = not bool(args.no_arena)
 
     photo_paths = find_photos(cast("list[Path]", args.photos))
     if not photo_paths:
@@ -293,6 +318,7 @@ def main() -> int:
         "photos": len(photos),
         "cpu": f"{platform.processor() or platform.machine()}, {os.cpu_count()} cores",
         "threads": methods_mod.THREADS,
+        "arena": methods_mod.ARENA,
         "date": time.strftime("%Y-%m-%d %H:%M"),
     }
     runs: list[dict[str, object]] = []
@@ -301,8 +327,10 @@ def main() -> int:
         print(f"[{name}] {method.description}", flush=True)
         run: dict[str, object] = {"name": name, "family": method.family, "description": method.description,
                                   "license": method.license, "download_bytes": method.download_bytes,
-                                  "load_seconds": 0.0, "mean_seconds": None, "mean_metrics": {}, "error": None}
+                                  "load_seconds": 0.0, "mean_seconds": None, "mean_metrics": {}, "error": None,
+                                  "peak_mb": None}
         runs.append(run)
+        reset_peak_memory()
         try:
             t = time.perf_counter()
             method.load()
@@ -327,6 +355,8 @@ def main() -> int:
                 continue
             if not args.no_stretch:
                 mask = mask.point(STRETCH_LUT)
+            if args.keep_main:
+                mask = keep_main_subject(mask)
             seconds.append(dt)
             cutout = img.convert("RGBA")
             cutout.putalpha(mask)
@@ -347,6 +377,7 @@ def main() -> int:
                 entry["error"] = data_uri(thumb(error_map(img, pred, gt)), "JPEG")
             cast("dict[str, object]", photo["results"])[name] = entry
             print(f"  {photo['name']}: {dt:.2f} s" + (f"  IoU {cast('dict[str, float]', entry['metrics'])['iou']:.3f}" if "metrics" in entry else ""), flush=True)
+        run["peak_mb"] = peak_memory_mb()
         method.unload()
         run["mean_seconds"] = float(np.mean(seconds)) if seconds else None
         run["mean_metrics"] = {k: float(np.mean(v)) for k, v in metric_lists.items()}
