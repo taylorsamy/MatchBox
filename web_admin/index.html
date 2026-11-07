@@ -53,6 +53,8 @@
     <button class="tab-btn" data-tab="video">Video &amp; Web</button>
     <button class="tab-btn" data-tab="sync">Sync</button>
     <button class="tab-btn" data-tab="tunnel">Tunnel</button>
+    <button class="tab-btn" data-tab="companion">Companion</button>
+    <button class="tab-btn" data-tab="photos">Robot Photos</button>
     <button class="tab-btn" data-tab="logs">Logs</button>
     <button class="tab-btn" data-tab="clips">Clips</button>
     <button class="tab-btn" data-tab="obs">OBS Control</button>
@@ -223,6 +225,89 @@
             <label for="cfg-tunnel-allow-admin">
                 <input type="checkbox" id="cfg-tunnel-allow-admin" checked> Allow the MatchBox team to remotely connect to this instance
             </label>
+        </div>
+    </div>
+</div>
+
+<!-- Companion Tab -->
+<div class="tab-content" id="tab-companion">
+    <div class="form-section">
+        <h2>Bitfocus Companion</h2>
+        <p class="form-hint" style="margin-left:0; margin-bottom:12px;">Press Companion buttons and update Companion custom variables when the FTC scoring system sends match signals. Uses Companion's HTTP remote control (Companion 3.0 or newer).</p>
+        <div class="form-row">
+            <label for="cfg-companion-enabled">
+                <input type="checkbox" id="cfg-companion-enabled"> Enable Companion integration
+            </label>
+        </div>
+        <div class="form-row">
+            <label for="cfg-companion-host">Companion Host</label>
+            <input type="text" id="cfg-companion-host" placeholder="127.0.0.1">
+            <label for="cfg-companion-port">Port</label>
+            <input type="number" id="cfg-companion-port" placeholder="8000">
+        </div>
+        <div class="form-row">
+            <label for="cfg-companion-variables">
+                <input type="checkbox" id="cfg-companion-variables"> Also set custom variables
+            </label>
+        </div>
+        <p class="form-hint" style="margin-left:0;">Sets <code>matchbox_event</code>, <code>matchbox_field</code> and <code>matchbox_match</code>. Create them first in Companion under Variables &rarr; Custom Variables, then use them in button text or triggers.</p>
+    </div>
+
+    <div class="form-section">
+        <h2>Signal to Button Mapping</h2>
+        <textarea id="cfg-companion-mappings" rows="8" spellcheck="false" placeholder="START_MATCH = 1/0/0"></textarea>
+        <p class="form-hint" style="margin-left:0;">One mapping per line: <code>SCORING_SYSTEM_MESSAGE = page/row/column</code>. Separate several buttons with commas. Lines starting with # are ignored.
+            Known signals: <code>SHOW_PREVIEW</code>, <code>SHOW_MATCH</code>, <code>START_MATCH</code>. Any other message type the scoring system sends is written to the log once, so you can map it too.</p>
+    </div>
+</div>
+
+<!-- Robot Photos Tab -->
+<div class="tab-content" id="tab-photos">
+    <div class="form-section">
+        <h2>Robot Photos</h2>
+        <p class="form-hint" style="margin-left:0; margin-bottom:12px;">Open the capture page on a phone or tablet connected to the event network to photograph robots. Backgrounds are removed and every photo is fitted onto the same size canvas.</p>
+        <div class="form-row">
+            <label for="cfg-photos-enabled">
+                <input type="checkbox" id="cfg-photos-enabled"> Enable robot photo page
+            </label>
+        </div>
+        <div class="form-row">
+            <label>Capture page</label>
+            <span id="photos-url"></span>
+        </div>
+        <div class="form-row">
+            <label for="cfg-photo-width">Photo size (pixels)</label>
+            <input type="number" id="cfg-photo-width" placeholder="1200">
+            <label for="cfg-photo-height">&times;</label>
+            <input type="number" id="cfg-photo-height" placeholder="900">
+        </div>
+        <div class="form-row">
+            <label for="cfg-photo-model">Background removal model</label>
+            <select id="cfg-photo-model">
+                <option value="u2net">U&sup2;-Net (best quality, 176 MB one-time download)</option>
+                <option value="u2netp">U&sup2;-Net-P (4.6 MB, faster, rougher edges)</option>
+            </select>
+        </div>
+        <div class="form-row">
+            <label for="cfg-photo-pin">Upload PIN (optional)</label>
+            <input type="text" id="cfg-photo-pin" placeholder="Leave blank for no PIN" autocomplete="off">
+        </div>
+        <p class="form-hint" style="margin-left:0;">Without a PIN, anyone on the network who opens the page can upload photos. Size and model changes apply to new photos; use &ldquo;Reprocess all photos&rdquo; to apply them to existing ones. Photos are stored in the event's clips folder under <code>robot_photos/</code> and are not uploaded by Sync.</p>
+    </div>
+
+    <div class="form-section">
+        <h2>Background Removal</h2>
+        <p id="photos-model-status" class="form-hint" style="margin-left:0; font-size:14px;">--</p>
+        <div class="form-row">
+            <button class="btn btn-secondary btn-sm" id="btn-photos-download">Download model now</button>
+            <button class="btn btn-secondary btn-sm" id="btn-photos-reprocess">Reprocess all photos</button>
+        </div>
+    </div>
+
+    <div class="form-section">
+        <h2>Photographed Teams <span id="photos-count" style="color: var(--text-muted); font-weight: 400;"></span></h2>
+        <div id="photos-grid" class="photo-grid">
+            <p style="color: var(--text-muted)">Loading...</p>
         </div>
     </div>
 </div>

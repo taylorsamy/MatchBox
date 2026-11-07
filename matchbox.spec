@@ -36,6 +36,7 @@ datas += [('./us.brainstormz.MatchBox.png', '.'),
          ('./us.brainstormz.MatchBox.Devel.png', '.')]
 datas += collect_data_files('sv_ttk')
 datas += [('./web_admin', 'web_admin')]
+datas += [('./web_photos', 'web_photos')]
 datas += [('./web_api', 'web_api')]
 hiddenimports += collect_submodules('zeroconf') # https://github.com/pyinstaller/pyinstaller-hooks-contrib/issues/840
 

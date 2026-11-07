@@ -8,3 +8,10 @@ zeroconf>=0.131.0
 
 # GUI theme (optional, recommended for Linux)
 sv-ttk>=2.0.0
+
+# Robot photos: background removal runs the U2-Net model directly through onnxruntime
+# (imported lazily; if numpy/onnxruntime are missing, photos are still saved and resized,
+# just without background removal)
+Pillow>=10.0.0
+numpy>=1.26
+onnxruntime>=1.18
