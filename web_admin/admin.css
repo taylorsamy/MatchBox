@@ -176,6 +176,75 @@ body {
     width: 80px;
 }
 
+.form-row input[type="checkbox"] {
+    width: auto;
+    margin-right: 6px;
+}
+
+textarea {
+    width: 100%;
+    max-width: 640px;
+    padding: 8px 10px;
+    background: var(--bg);
+    border: 1px solid var(--border);
+    border-radius: 4px;
+    color: var(--text);
+    font-family: ui-monospace, SFMono-Regular, Menlo, Consolas, monospace;
+    font-size: 13px;
+    resize: vertical;
+}
+
+code {
+    background: var(--bg-elevated);
+    padding: 1px 5px;
+    border-radius: 3px;
+}
+
+.photo-grid {
+    display: grid;
+    grid-template-columns: repeat(auto-fill, minmax(150px, 1fr));
+    gap: 10px;
+}
+
+.photo-tile {
+    position: relative;
+    background: var(--bg-surface);
+    border: 1px solid var(--border);
+    border-radius: 6px;
+    overflow: hidden;
+    text-align: center;
+    font-size: 13px;
+}
+
+.photo-tile .thumb {
+    aspect-ratio: 4 / 3;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    color: var(--text-muted);
+    background-color: #cfcfcf;
+    background-image: linear-gradient(45deg, #aaa 25%, transparent 25%, transparent 75%, #aaa 75%),
+                      linear-gradient(45deg, #aaa 25%, transparent 25%, transparent 75%, #aaa 75%);
+    background-size: 12px 12px;
+    background-position: 0 0, 6px 6px;
+}
+
+.photo-tile .thumb.empty { background: var(--bg); }
+.photo-tile img { width: 100%; height: 100%; object-fit: contain; display: block; }
+.photo-tile .name { padding: 5px 4px; }
+
+.photo-tile .badge {
+    position: absolute;
+    top: 4px;
+    right: 4px;
+    font-size: 11px;
+    padding: 1px 6px;
+    border-radius: 10px;
+    color: #000;
+    background: var(--yellow);
+}
+.photo-tile .badge.err { background: var(--red); color: #fff; }
+
 .form-hint {
     font-size: 12px;
     color: var(--text-muted);

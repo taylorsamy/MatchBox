@@ -63,6 +63,15 @@ def get_web_admin_dir() -> Path:
     return Path(__file__).parent.parent / 'web_admin'
 
 
+def get_web_photos_dir() -> Path:
+    """Get path to web_photos static files directory (the robot photo capture page)"""
+    if getattr(sys, 'frozen', False):
+        meipass = getattr(sys, '_MEIPASS', None)
+        if isinstance(meipass, str):
+            return Path(meipass) / 'web_photos'
+    return Path(__file__).parent.parent / 'web_photos'
+
+
 def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleHTTPRequestHandler]:
     """Create an HTTP handler class with REST API and admin UI support.
 
@@ -75,6 +84,7 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
         _core: MatchBoxCore = core
         _clips_dir: str = clips_directory
         _web_admin_dir: str = str(get_web_admin_dir())
+        _web_photos_dir: str = str(get_web_photos_dir())
         path: str
 
         def __init__(self, request: socket.socket, client_address: tuple[str, int], server: BaseServer) -> None:
@@ -205,6 +215,15 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
                 self._send_login_page()
                 return
 
+            # Robot photo capture page + API: open to the local network like the clip downloads
+            # (uploads can be protected with the optional photo PIN)
+            if path == '/photos':
+                self._send_redirect('photos/')  # relative, so it also works behind a relay prefix
+                return
+            if path.startswith('/photos/'):
+                self._handle_photos_get(path, parse_qs(parsed.query))
+                return
+
             # Auth check for /admin/*, /api/*, and /obs-web/*
             if path.startswith('/admin') or path.startswith('/api/') or path.startswith('/obs-web'):
                 if not self._check_auth():
@@ -214,6 +233,10 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
             # API routes
             if path == '/api/status':
                 self.send_json(self._core.get_status())
+                return
+
+            if path == '/api/photos':
+                self.send_json(self._photos_payload())
                 return
 
             if path == '/api/config':
@@ -254,6 +277,12 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
                 self.path = '/favicon.ico'
                 return self._serve_admin_static()
 
+            # Robot photos live inside the clips directory but are only served through /photos/img/
+            # (so the untouched originals are never exposed)
+            if path.rstrip('/') == '/robot_photos' or path.startswith('/robot_photos/'):
+                self.send_error(404, "File not found")
+                return
+
             # Fall through to clip-serving with range request support
             self._serve_clip_file()
 
@@ -272,6 +301,11 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
                     self._send_redirect('/admin/', cookie)
                 else:
                     self._send_login_page('Invalid password')
+                return
+
+            # Robot photo upload (open to the local network; optional PIN checked inside)
+            if path == '/photos/api/upload':
+                self._handle_photo_upload(parse_qs(parsed.query))
                 return
 
             # Auth check for /api/*
@@ -339,6 +373,20 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
                     self.send_json({'ok': False, 'error': str(e)}, 500)
                 return
 
+            if path == '/api/photos/reprocess':
+                try:
+                    count = self._core.robot_photos.reprocess_all()
+                    self.send_json({'ok': True, 'count': count})
+                except Exception as e:
+                    self.send_json({'ok': False, 'error': str(e)}, 500)
+                return
+
+            if path == '/api/photos/download-model':
+                import threading
+                _ = threading.Thread(target=self._core.robot_photos.download_model, daemon=True).start()
+                self.send_json({'ok': True})
+                return
+
             if path == '/api/config':
                 try:
                     data = self.read_body()
@@ -388,18 +436,148 @@ def make_admin_handler(clips_directory: str, core: MatchBoxCore) -> type[SimpleH
             # Treat PUT same as POST for API
             self.do_POST()
 
-        def _serve_admin_static(self) -> None:
-            """Serve static files from web_admin directory"""
+        # ---- Robot photos
+
+        def _photos_payload(self) -> dict[str, object]:
+            """Everything the capture page / admin tab needs: settings, capabilities and the photo list"""
+            config = self._core.config
+            teams = self._core.event_teams.get()
+            photos = self._core.robot_photos.list_photos()
+            for photo in photos:
+                team = str(photo['team'])
+                photo['name'] = teams.teams.get(team, '')
+                # Stable address of the finished photo (for overlays): /photos/img/processed/<team>.png
+                photo['url'] = f'/photos/img/processed/{team}.png' if photo.get('has_image') else None
+            return {
+                'enabled': config.robot_photos_enabled,
+                'event_code': config.event_code,
+                'pin_required': bool(config.robot_photo_pin),
+                'capabilities': self._core.robot_photos.capabilities(),
+                'team_list': {'count': len(teams.teams), 'source': teams.source,
+                              'problem': teams.problem, 'loading': teams.loading},
+                'photos': photos,
+            }
+
+        def _handle_photos_get(self, path: str, query: dict[str, list[str]]) -> None:
+            """GET /photos/... : the capture page, JSON API and processed images"""
+            if path == '/photos/':
+                self.path = '/index.html'
+                return self._serve_admin_static(self._web_photos_dir)
+
+            if not self._core.config.robot_photos_enabled:
+                self.send_json({'error': 'Robot photos are disabled'}, 503)
+                return
+
+            if path == '/photos/api/photos':
+                self.send_json(self._photos_payload())
+                return
+
+            if path == '/photos/api/teams':
+                self.send_json(self._core.event_teams.get().to_dict())
+                return
+
+            if path == '/photos/api/status':
+                from robot_photos import PhotoRejected, normalize_team
+                try:
+                    team = normalize_team(query.get('team', [''])[0])
+                except PhotoRejected as e:
+                    self.send_json({'error': str(e)}, 400)
+                    return
+                status = self._core.robot_photos.status(team)
+                if status is None:
+                    self.send_json({'error': 'No photo for that team'}, 404)
+                else:
+                    self.send_json(status)
+                return
+
+            if path.startswith('/photos/img/'):
+                # /photos/img/<processed|thumbs>/<team>.png (originals are never served)
+                parts = path[len('/photos/img/'):].split('/')
+                image = None
+                if len(parts) == 2 and parts[1].endswith('.png'):
+                    image = self._core.robot_photos.image_path(parts[0], parts[1][:-4])
+                if image is None:
+                    self.send_error(404, "File not found")
+                    return
+                try:
+                    body = image.read_bytes()
+                except OSError:
+                    self.send_error(404, "File not found")
+                    return
+                self.send_response(200)
+                self.send_header('Content-Type', 'image/png')
+                self.send_header('Content-Length', str(len(body)))
+                self.end_headers()
+                _ = self.wfile.write(body)
+                return
+
+            self.send_error(404, "File not found")
+
+        def _handle_photo_upload(self, query: dict[str, list[str]]) -> None:
+            """POST /photos/api/upload?team=1234 with the raw image bytes as the request body"""
+            from robot_photos import MAX_UPLOAD_BYTES, PhotoRejected
+
+            config = self._core.config
+            if not config.robot_photos_enabled:
+                self.send_json({'error': 'Robot photos are disabled'}, 503)
+                return
+
+            length_header = self.headers.get('Content-Length')
+            try:
+                length = int(length_header) if length_header is not None else -1
+            except ValueError:
+                length = -1
+            if length <= 0:
+                self.send_json({'error': 'Upload must include a photo'}, 400)
+                return
+            if length > MAX_UPLOAD_BYTES:
+                # Swallow (a bounded amount of) the body so the phone gets this message, not a reset connection
+                remaining = min(length, 4 * MAX_UPLOAD_BYTES)
+                while remaining > 0:
+                    chunk = self.rfile.read(min(65536, remaining))
+                    if not chunk:
+                        break
+                    remaining -= len(chunk)
+                self.send_json({'error': 'Photo is too large (30 MB maximum)'}, 413)
+                return
+            # Read the whole body before answering so the phone sees our reply, not a reset connection
+            body = self.rfile.read(length)
+
+            pin = config.robot_photo_pin
+            if pin and not hmac.compare_digest(self.headers.get('X-Photo-Pin', '').encode(), pin.encode()):
+                self.send_json({'error': 'Wrong or missing PIN'}, 401)
+                return
+            if len(body) != length:
+                self.send_json({'error': 'Upload was interrupted, please try again'}, 400)
+                return
+
+            try:
+                job = self._core.robot_photos.submit(query.get('team', [''])[0], body)
+            except PhotoRejected as e:
+                self.send_json({'error': str(e)}, 400)
+                return
+            except ImportError:
+                self.send_json({'error': 'Photo processing libraries are not installed on the MatchBox computer'}, 503)
+                return
+            except Exception as e:
+                logger.error(f"Error saving robot photo: {e}")
+                self.send_json({'error': 'Could not save the photo'}, 500)
+                return
+            self.send_json({'ok': True, **job.to_dict()}, 202)
+
+        def _serve_admin_static(self, base_dir: str | None = None) -> None:
+            """Serve static files from the web_admin directory (or another static directory)"""
+            static_dir = base_dir or self._web_admin_dir
             # Sanitize path
             rel_path = self.path.lstrip('/')
             if not rel_path:
                 rel_path = 'index.html'
 
-            file_path = os.path.join(self._web_admin_dir, rel_path)
+            file_path = os.path.join(static_dir, rel_path)
             file_path = os.path.realpath(file_path)
 
-            # Security: ensure we stay within web_admin dir
-            if not file_path.startswith(os.path.realpath(self._web_admin_dir)):
+            # Security: ensure we stay within the static dir
+            if not file_path.startswith(os.path.realpath(static_dir)):
                 self.send_error(403, "Forbidden")
                 return
 

@@ -74,6 +74,7 @@ document.addEventListener('DOMContentLoaded', () => {
     loadConfig();
     loadClips();
     loadStatus();
+    loadPhotos();
 
     // Connect WebSockets
     connectStatusWS();
@@ -88,6 +89,8 @@ document.addEventListener('DOMContentLoaded', () => {
     document.getElementById('btn-stop-sync').addEventListener('click', stopSync);
     document.getElementById('btn-start-tunnel').addEventListener('click', startTunnel);
     document.getElementById('btn-stop-tunnel').addEventListener('click', stopTunnel);
+    document.getElementById('btn-photos-reprocess').addEventListener('click', reprocessPhotos);
+    document.getElementById('btn-photos-download').addEventListener('click', downloadPhotoModel);
 
     // Auto-scroll toggle
     const logContainer = document.getElementById('log-container');
@@ -99,6 +102,7 @@ document.addEventListener('DOMContentLoaded', () => {
     // Periodic refresh
     setInterval(loadClips, 30000);
     setInterval(loadStatus, 10000);
+    setInterval(loadPhotos, 15000);
 });
 
 // --- WebSocket connections ---
@@ -258,6 +262,22 @@ function populateConfigForm(cfg) {
     setVal('cfg-tunnel-password', cfg.tunnel_password);
     const allowAdmin = document.getElementById('cfg-tunnel-allow-admin');
     if (allowAdmin) allowAdmin.checked = cfg.tunnel_allow_admin !== false;
+
+    // Companion
+    setChecked('cfg-companion-enabled', cfg.companion_enabled === true);
+    setVal('cfg-companion-host', cfg.companion_host);
+    setVal('cfg-companion-port', cfg.companion_port);
+    setChecked('cfg-companion-variables', cfg.companion_set_variables !== false);
+    setVal('cfg-companion-mappings', cfg.companion_mappings);
+
+    // Robot photos
+    setChecked('cfg-photos-enabled', cfg.robot_photos_enabled !== false);
+    setVal('cfg-photo-width', cfg.robot_photo_width);
+    setVal('cfg-photo-height', cfg.robot_photo_height);
+    setVal('cfg-photo-model', cfg.robot_photo_model === 'u2net' ? 'u2net' : 'birefnet-512');
+    setVal('cfg-photo-pin', cfg.robot_photo_pin);
+    setVal('cfg-photo-teams', cfg.robot_photo_teams);
+    updatePhotosUrl();
 }
 
 function getConfigFromForm() {
@@ -287,6 +307,17 @@ function getConfigFromForm() {
         tunnel_relay_url: getVal('cfg-tunnel-relay-url'),
         tunnel_password: getVal('cfg-tunnel-password'),
         tunnel_allow_admin: document.getElementById('cfg-tunnel-allow-admin')?.checked ?? true,
+        companion_enabled: getChecked('cfg-companion-enabled', false),
+        companion_host: getVal('cfg-companion-host').trim() || '127.0.0.1',
+        companion_port: parseInt(getVal('cfg-companion-port')) || 8000,
+        companion_set_variables: getChecked('cfg-companion-variables', true),
+        companion_mappings: getVal('cfg-companion-mappings'),
+        robot_photos_enabled: getChecked('cfg-photos-enabled', true),
+        robot_photo_width: parseInt(getVal('cfg-photo-width')) || 1200,
+        robot_photo_height: parseInt(getVal('cfg-photo-height')) || 900,
+        robot_photo_model: getVal('cfg-photo-model') || 'birefnet-512',
+        robot_photo_pin: getVal('cfg-photo-pin').trim(),
+        robot_photo_teams: getVal('cfg-photo-teams'),
     };
 }
 
@@ -298,6 +329,16 @@ function setVal(id, val) {
 function getVal(id) {
     const el = document.getElementById(id);
     return el ? el.value : '';
+}
+
+function setChecked(id, checked) {
+    const el = document.getElementById(id);
+    if (el) el.checked = !!checked;
+}
+
+function getChecked(id, fallback) {
+    const el = document.getElementById(id);
+    return el ? el.checked : fallback;
 }
 
 // --- Actions ---
@@ -375,6 +416,140 @@ async function stopTunnel() {
     try {
         const result = await API.post('tunnel/stop');
         if (!result.ok) alert(result.error || 'Could not stop tunnel');
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+// --- Robot photos ---
+function updatePhotosUrl() {
+    const el = document.getElementById('photos-url');
+    if (!el) return;
+    const prefix = getRelayPrefix() || '';
+    const urls = [`${window.location.origin}${prefix}/photos/`];
+    const name = getVal('cfg-mdns-name');
+    const port = parseInt(getVal('cfg-web-port')) || 80;
+    if (!prefix && name) {
+        const mdns = `http://${name}${port === 80 ? '' : ':' + port}/photos/`;
+        if (!urls.includes(mdns)) urls.push(mdns);
+    }
+    el.textContent = '';
+    urls.forEach((url, i) => {
+        if (i > 0) el.append(' \u00b7 ');
+        const a = document.createElement('a');
+        a.href = url; a.target = '_blank'; a.textContent = url;
+        a.style.color = 'var(--accent)';
+        el.append(a);
+    });
+}
+
+async function loadPhotos() {
+    try {
+        renderPhotos(await API.get('photos'));
+    } catch(e) {}
+}
+
+function renderPhotos(data) {
+    const caps = data.capabilities || {};
+    let status;
+    if (caps.dependencies_ok === false) {
+        status = 'Background removal unavailable: ' + (caps.problem || 'missing libraries');
+    } else if (caps.problem) {
+        status = 'Background removal problem: ' + caps.problem;
+    } else if (caps.model_ready) {
+        status = `Ready: ${caps.model_label || caps.model}, photos are ${caps.width} \u00d7 ${caps.height} px.`;
+    } else {
+        status = 'Model not downloaded yet. It downloads automatically with the first photo (internet needed once), or use "Download model now".';
+    }
+    setText('photos-model-status', status);
+
+    const tl = data.team_list || {};
+    let teamStatus;
+    if (tl.count) {
+        teamStatus = `${tl.count} teams available to photographers (from ${tl.source}).`;
+        if (tl.source === 'settings' && tl.problem) teamStatus += ` Scoring system list not used: ${tl.problem}`;
+    } else if (tl.loading) {
+        teamStatus = 'Reading the team list from the scoring system...';
+    } else {
+        teamStatus = 'No team list: photographers type team numbers. ' + (tl.problem ? `(${tl.problem})` : '');
+    }
+    setText('photos-team-status', teamStatus);
+
+    const photos = data.photos || [];
+    const done = photos.filter(p => p.state === 'done').length;
+    setText('photos-count', photos.length ? `(${done})` : '');
+
+    const grid = document.getElementById('photos-grid');
+    if (!grid) return;
+    grid.textContent = '';
+    if (photos.length === 0) {
+        const p = document.createElement('p');
+        p.style.color = 'var(--text-muted)';
+        p.textContent = 'No robot photos yet...';
+        grid.appendChild(p);
+        return;
+    }
+    const prefix = getRelayPrefix() || '';
+    photos.forEach(photo => {
+        const tile = document.createElement('div');
+        tile.className = 'photo-tile';
+
+        const thumb = document.createElement('div');
+        thumb.className = 'thumb';
+        if (photo.has_image) {
+            const img = document.createElement('img');
+            img.loading = 'lazy';
+            img.alt = 'Team ' + photo.team;
+            img.src = `${prefix}/photos/img/thumbs/${photo.team}.png?v=${Math.round((photo.updated || 0) * 1000)}`;
+            const link = document.createElement('a');
+            link.href = `${prefix}/photos/img/processed/${photo.team}.png`;
+            link.target = '_blank';
+            link.style.display = 'contents';
+            link.appendChild(img);
+            thumb.appendChild(link);
+        } else {
+            thumb.classList.add('empty');
+            thumb.textContent = photo.state === 'error' ? 'Failed' : 'Working...';
+        }
+        tile.appendChild(thumb);
+
+        const name = document.createElement('div');
+        name.className = 'name';
+        name.textContent = 'Team ' + photo.team + (photo.name ? ' \u00b7 ' + photo.name : '');
+        tile.appendChild(name);
+
+        const badgeText = photo.state === 'error' ? 'failed'
+            : (photo.state === 'queued' || photo.state === 'processing') ? 'updating'
+            : (photo.state === 'done' && photo.bg_removed === false) ? 'no cut-out' : '';
+        if (badgeText) {
+            const badge = document.createElement('span');
+            badge.className = 'badge' + (photo.state === 'error' ? ' err' : '');
+            badge.textContent = badgeText;
+            if (photo.message) badge.title = photo.message;
+            tile.appendChild(badge);
+        }
+        grid.appendChild(tile);
+    });
+}
+
+async function reprocessPhotos() {
+    try {
+        await API.post('config', getConfigFromForm());  // use the size/model currently shown
+        const result = await API.post('photos/reprocess');
+        alert(result.ok ? `Reprocessing ${result.count} photo(s)...` : 'Error: ' + (result.error || 'Unknown'));
+        setTimeout(loadPhotos, 1500);
+    } catch(e) {
+        alert('Error: ' + e.message);
+    }
+}
+
+async function downloadPhotoModel() {
+    try {
+        await API.post('config', getConfigFromForm());
+        const result = await API.post('photos/download-model');
+        alert(result.ok ? 'Downloading in the background. Progress is shown in the Logs tab.' : 'Error: ' + (result.error || 'Unknown'));
+        // Check back a few times so the status line updates when the download finishes
+        [5000, 15000, 30000, 60000].forEach(ms => setTimeout(loadPhotos, ms));
     } catch(e) {
         alert('Error: ' + e.message);
     }

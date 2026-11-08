@@ -91,6 +91,9 @@ ADMIN_HASH = 'b2dccbe9889768f2f27b6715701a56a05cede5ca6a7d04494273a5a803d9bbcb'
 
 # Import after logging is configured so it uses our config
 from local_video_processor import LocalVideoProcessor
+from companion import CompanionClient
+from robot_photos import RobotPhotoProcessor
+from team_list import TeamDirectory
 
 
 def get_rsync_path() -> str:
@@ -140,6 +143,25 @@ class MatchBoxConfig:
         self.tunnel_relay_url: str = 'wss://jacobspctuneup.tk/FTC/MatchBox/admin'
         self.tunnel_password: str = ''
         self.tunnel_allow_admin: bool = True
+        # Bitfocus Companion settings
+        self.companion_enabled: bool = False
+        self.companion_host: str = '127.0.0.1'
+        self.companion_port: int = 8000
+        self.companion_set_variables: bool = True
+        self.companion_mappings: str = "\n".join([
+            "# Scoring system message = Companion button (page/row/column)",
+            "# START_MATCH = 1/0/0",
+            "# SHOW_PREVIEW = 1/0/1",
+            "# SHOW_MATCH = 1/0/2",
+            "",
+        ])
+        # Robot photo settings (capture page is served at /photos/)
+        self.robot_photos_enabled: bool = True
+        self.robot_photo_width: int = 1200
+        self.robot_photo_height: int = 900
+        self.robot_photo_model: str = 'birefnet-512'  # 'birefnet-512' (best, ~3.3 GB RAM) or 'u2net' (fast, low memory)
+        self.robot_photo_pin: str = ''  # if set, uploads must supply this PIN
+        self.robot_photo_teams: str = ''  # optional "number name" per line; merged with the scoring system's list
 
 class MatchBoxCore:
     """Core MatchBox functionality combining OBS switching and video autosplitting"""
@@ -185,6 +207,15 @@ class MatchBoxCore:
         # Create output directory with event code subfolder
         self.clips_dir: Path = Path(self.config.output_dir).absolute() / self.config.event_code
         self.clips_dir.mkdir(exist_ok=True, parents=True)
+
+        # Bitfocus Companion integration (reacts to scoring system messages)
+        self.companion: CompanionClient = CompanionClient(self.config)
+
+        # Robot photos (stored under <clips_dir>/robot_photos, follows clips_dir if the event changes)
+        self.robot_photos: RobotPhotoProcessor = RobotPhotoProcessor(lambda: self.clips_dir, self.config)
+
+        # Teams at the event, for the photo page's team picker (settings list + scoring system)
+        self.event_teams: TeamDirectory = TeamDirectory(self.config)
 
     def register_status_callback(self, callback: Callable[[dict[str, object]], None]) -> None:
         """Register a callback to be notified of status changes"""
@@ -594,6 +625,10 @@ class MatchBoxCore:
             self.web_thread = threading.Thread(target=run_server, daemon=True)
             self.web_thread.start()
 
+            # Load the robot photo model into memory if it was downloaded earlier (never downloads here)
+            if self.config.robot_photos_enabled:
+                self.robot_photos.start_warmup()
+
             # Register mDNS service for local network discovery
             _ = self.register_mdns_service()
 
@@ -743,6 +778,9 @@ class MatchBoxCore:
                     try:
                         message = await asyncio.wait_for(websocket.recv(), timeout=1.0)
                         data: dict[str, object] = cast(dict[str, object], json.loads(message))
+
+                        # Fire Bitfocus Companion actions (queued; never blocks or raises)
+                        self.companion.handle_message(data)
 
                         if data.get("type") == "SHOW_PREVIEW" or data.get("type") == "SHOW_MATCH":
                             # Extract field number
@@ -1323,6 +1361,7 @@ class MatchBoxCore:
             '-avz',
             '--checksum',
             '--exclude', '*.partial',
+            '--exclude', 'robot_photos/',  # robot photos stay local; they aren't match clips
             source_arg,
             rsync_url
         ]
@@ -1420,6 +1459,10 @@ class MatchBoxCore:
         # Stop WebSocket tunnel
         self.stop_tunnel()
 
+        # Stop Companion and robot photo background workers
+        self.companion.stop()
+        self.robot_photos.stop()
+
         # Stop WebSocket server
         if self.ws_broadcaster:
             self.ws_broadcaster.stop()
@@ -1495,6 +1538,21 @@ class MatchBoxGUI:
         self.tunnel_password_var: tk.StringVar = tk.StringVar()
         self.tunnel_allow_admin_var: tk.BooleanVar = tk.BooleanVar(value=True)
 
+        # Companion settings
+        self.companion_enabled_var: tk.BooleanVar = tk.BooleanVar(value=False)
+        self.companion_host_var: tk.StringVar = tk.StringVar()
+        self.companion_port_var: tk.IntVar = tk.IntVar()
+        self.companion_variables_var: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.companion_mappings_text: tk.Text  # initialized in create_companion_tab
+
+        # Robot photo settings
+        self.photos_enabled_var: tk.BooleanVar = tk.BooleanVar(value=True)
+        self.photo_width_var: tk.IntVar = tk.IntVar()
+        self.photo_height_var: tk.IntVar = tk.IntVar()
+        self.photo_model_var: tk.StringVar = tk.StringVar()
+        self.photo_pin_var: tk.StringVar = tk.StringVar()
+        self.photo_teams_text: tk.Text  # initialized in create_photos_tab
+
         # Tunnel UI elements (initialized in create_tunnel_settings_tab)
         self.start_tunnel_button: ttk.Button
         self.stop_tunnel_button: ttk.Button
@@ -1553,6 +1611,12 @@ class MatchBoxGUI:
 
         # Remote access tab
         self.create_tunnel_settings_tab(notebook)
+
+        # Bitfocus Companion tab
+        self.create_companion_tab(notebook)
+
+        # Robot photos tab
+        self.create_photos_tab(notebook)
 
         # Control & Log Frame
         control_frame = ttk.Frame(main_frame, padding="10")
@@ -1813,6 +1877,125 @@ class MatchBoxGUI:
         self.tunnel_status_var = tk.StringVar(value="Tunnel: Disconnected")
         ttk.Label(tunnel_button_frame, textvariable=self.tunnel_status_var).pack(side=tk.LEFT, padx=(15, 0))
 
+    def create_companion_tab(self, notebook: ttk.Notebook) -> None:
+        """Create Bitfocus Companion settings tab"""
+        companion_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(companion_frame, text="Companion")
+
+        ttk.Label(companion_frame, text="Bitfocus Companion", font=("", 12, "bold")).grid(
+            row=0, column=0, columnspan=4, sticky=tk.W, pady=(0, 5))
+
+        ttk.Checkbutton(companion_frame, text="Enable Companion integration",
+                        variable=self.companion_enabled_var).grid(
+            row=1, column=0, columnspan=4, sticky=tk.W, pady=2)
+
+        ttk.Label(companion_frame, text="Companion Host:").grid(row=2, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        ttk.Entry(companion_frame, textvariable=self.companion_host_var, width=30).grid(
+            row=2, column=1, sticky=tk.W, pady=2)
+        ttk.Label(companion_frame, text="Port:").grid(row=2, column=2, sticky=tk.W, pady=2, padx=10)
+        ttk.Entry(companion_frame, textvariable=self.companion_port_var, width=6, validate="key", validatecommand=(self.vcmd, "%P")).grid(
+            row=2, column=3, sticky=tk.W, pady=2)
+
+        ttk.Checkbutton(companion_frame, text="Also set custom variables (matchbox_event, matchbox_field, matchbox_match)",
+                        variable=self.companion_variables_var).grid(
+            row=3, column=0, columnspan=4, sticky=tk.W, pady=2)
+
+        ttk.Label(companion_frame, text="Signal to Button Mapping", font=("", 12, "bold")).grid(
+            row=4, column=0, columnspan=4, sticky=tk.W, pady=(10, 5))
+
+        self.companion_mappings_text = tk.Text(companion_frame, height=6, width=70, wrap="none")
+        self.companion_mappings_text.grid(row=5, column=0, columnspan=4, sticky=tk.W, pady=2)
+
+        ttk.Label(companion_frame,
+                  text="\n".join([
+                      "One per line: SCORING_SYSTEM_MESSAGE = page/row/column (several buttons: comma separated).",
+                      "Known signals: SHOW_PREVIEW, SHOW_MATCH, START_MATCH. Other message types the scoring",
+                      "system sends are written to the log once so you can map them too. Needs Companion 3.0+.",
+                  ]),
+                  foreground="gray").grid(row=6, column=0, columnspan=4, sticky=tk.W, pady=5)
+
+    def create_photos_tab(self, notebook: ttk.Notebook) -> None:
+        """Create robot photos settings tab"""
+        photos_frame = ttk.Frame(notebook, padding="10")
+        notebook.add(photos_frame, text="Photos")
+
+        ttk.Label(photos_frame, text="Robot Photos", font=("", 12, "bold")).grid(
+            row=0, column=0, columnspan=2, sticky=tk.W, pady=(0, 5))
+
+        ttk.Checkbutton(photos_frame, text="Enable robot photo page",
+                        variable=self.photos_enabled_var).grid(
+            row=1, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        capture_url = f"http://{self.config.mdns_name}:{self.config.web_port}/photos/"
+        ttk.Label(photos_frame, text=f"Open on a phone or tablet: {capture_url}", foreground="gray").grid(
+            row=2, column=0, columnspan=2, sticky=tk.W, pady=2)
+
+        # Left: processing settings
+        settings = ttk.Frame(photos_frame, padding="0")
+        settings.grid(row=3, column=0, sticky=tk.NW, pady=(5, 0))
+
+        ttk.Label(settings, text="Photo size (pixels):").grid(row=0, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        size_frame = ttk.Frame(settings, padding="0")
+        size_frame.grid(row=0, column=1, sticky=tk.W)
+        ttk.Entry(size_frame, textvariable=self.photo_width_var, width=6, validate="key", validatecommand=(self.vcmd, "%P")).pack(side=tk.LEFT)
+        ttk.Label(size_frame, text=" x ").pack(side=tk.LEFT)
+        ttk.Entry(size_frame, textvariable=self.photo_height_var, width=6, validate="key", validatecommand=(self.vcmd, "%P")).pack(side=tk.LEFT)
+
+        ttk.Label(settings, text="Background removal:").grid(row=1, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        ttk.Combobox(settings, textvariable=self.photo_model_var, values=["birefnet-512", "u2net"],
+                     state="readonly", width=14).grid(row=1, column=1, sticky=tk.W, pady=2)
+        ttk.Label(settings, text="\n".join([
+            "birefnet-512: best (941 MB download, ~3.3 GB RAM, ~7 s/photo)",
+            "u2net: fast and light, but fills in open robot frames",
+        ]), foreground="gray").grid(row=2, column=0, columnspan=2, sticky=tk.W)
+
+        ttk.Label(settings, text="Upload PIN (optional):").grid(row=3, column=0, sticky=tk.W, pady=2, padx=(0, 10))
+        ttk.Entry(settings, textvariable=self.photo_pin_var, width=20).grid(row=3, column=1, sticky=tk.W, pady=2)
+
+        photo_button_frame = ttk.Frame(settings)
+        photo_button_frame.grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(10, 0))
+        ttk.Button(photo_button_frame, text="Download model now", command=self.download_photo_model).pack(side=tk.LEFT, padx=(0, 5))
+        ttk.Button(photo_button_frame, text="Reprocess all photos", command=self.reprocess_photos).pack(side=tk.LEFT, padx=5)
+
+        # Right: the event's teams, so photographers can pick instead of typing
+        teams = ttk.Frame(photos_frame, padding="0")
+        teams.grid(row=3, column=1, sticky=tk.NW, padx=(25, 0), pady=(5, 0))
+        ttk.Label(teams, text="Event teams (optional):").grid(row=0, column=0, sticky=tk.W)
+        self.photo_teams_text = tk.Text(teams, height=7, width=34, wrap="none")
+        self.photo_teams_text.grid(row=1, column=0, sticky=tk.W, pady=2)
+        ttk.Label(teams, text="One per line: number name. Added to the\nscoring system's list when it is available.",
+                  foreground="gray").grid(row=2, column=0, sticky=tk.W)
+
+        ttk.Label(photos_frame,
+                  text="\n".join([
+                      "Photos are saved as robot_photos/processed/<team>.png in the event's clips folder (also served at",
+                      "/photos/img/processed/<team>.png for overlays) and are not uploaded by Sync. Without a PIN anyone on",
+                      "the network can upload. Use Reprocess to apply size/model changes to existing photos.",
+                  ]),
+                  foreground="gray").grid(row=4, column=0, columnspan=2, sticky=tk.W, pady=(8, 0))
+
+    def download_photo_model(self) -> None:
+        """Download the background removal model in the background (progress is logged)"""
+        self.load_gui_to_config()
+        assert self.matchbox is not None
+        _ = threading.Thread(target=self.matchbox.robot_photos.download_model, daemon=True).start()
+        logger.info("📷 Downloading robot photo background removal model in the background...")
+
+    def reprocess_photos(self) -> None:
+        """Re-run every robot photo with the current size/model settings"""
+        self.load_gui_to_config()
+        assert self.matchbox is not None
+        count = self.matchbox.robot_photos.reprocess_all()
+        logger.info(f"📷 Reprocessing {count} robot photo(s)...")
+
+    @staticmethod
+    def _int_or(var: tk.IntVar, default: int) -> int:
+        """Read an IntVar, falling back to a default when the entry is empty"""
+        try:
+            return var.get()
+        except TclError:
+            return default
+
     def browse_output_dir(self) -> None:
         """Browse for output directory"""
         directory = filedialog.askdirectory(
@@ -1902,6 +2085,19 @@ class MatchBoxGUI:
         self.config.tunnel_relay_url = self.tunnel_relay_url_var.get()
         self.config.tunnel_password = self.tunnel_password_var.get()
         self.config.tunnel_allow_admin = self.tunnel_allow_admin_var.get()
+        # Companion settings
+        self.config.companion_enabled = self.companion_enabled_var.get()
+        self.config.companion_host = self.companion_host_var.get().strip() or '127.0.0.1'
+        self.config.companion_port = self._int_or(self.companion_port_var, 8000) or 8000
+        self.config.companion_set_variables = self.companion_variables_var.get()
+        self.config.companion_mappings = self.companion_mappings_text.get("1.0", "end-1c")
+        # Robot photo settings
+        self.config.robot_photos_enabled = self.photos_enabled_var.get()
+        self.config.robot_photo_width = self._int_or(self.photo_width_var, 1200) or 1200
+        self.config.robot_photo_height = self._int_or(self.photo_height_var, 900) or 900
+        self.config.robot_photo_model = self.photo_model_var.get() or 'birefnet-512'
+        self.config.robot_photo_pin = self.photo_pin_var.get().strip()
+        self.config.robot_photo_teams = self.photo_teams_text.get("1.0", "end-1c")
 
     def load_config_to_gui(self, config: MatchBoxConfig) -> None:
         """Load configuration into GUI"""
@@ -1934,6 +2130,23 @@ class MatchBoxGUI:
         self.tunnel_relay_url_var.set(config.tunnel_relay_url)
         self.tunnel_password_var.set(config.tunnel_password)
         self.tunnel_allow_admin_var.set(config.tunnel_allow_admin)
+
+        # Load Companion settings
+        self.companion_enabled_var.set(config.companion_enabled)
+        self.companion_host_var.set(config.companion_host)
+        self.companion_port_var.set(config.companion_port)
+        self.companion_variables_var.set(config.companion_set_variables)
+        self.companion_mappings_text.delete("1.0", tk.END)
+        self.companion_mappings_text.insert("1.0", config.companion_mappings)
+
+        # Load robot photo settings
+        self.photos_enabled_var.set(config.robot_photos_enabled)
+        self.photo_width_var.set(config.robot_photo_width)
+        self.photo_height_var.set(config.robot_photo_height)
+        self.photo_model_var.set(config.robot_photo_model)
+        self.photo_pin_var.set(config.robot_photo_pin)
+        self.photo_teams_text.delete("1.0", tk.END)
+        self.photo_teams_text.insert("1.0", config.robot_photo_teams)
 
     def save_config(self) -> None:
         """Save configuration to file"""
@@ -2072,6 +2285,10 @@ class MatchBoxGUI:
 
             # Stop sync if running
             self.matchbox.stop_sync()
+
+            # Stop Companion and robot photo background workers
+            self.matchbox.companion.stop()
+            self.matchbox.robot_photos.stop()
 
             # Always tear down web server and mDNS on app close
             if self.matchbox.ws_broadcaster:
